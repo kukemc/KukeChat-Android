@@ -48,6 +48,8 @@ object Endpoints {
     fun absolute(url: String?): String? = when {
         url.isNullOrBlank() -> null
         url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:") -> url
+        // 本地图（发送中的消息）：原样交给 Coil
+        url.startsWith("content:") || url.startsWith("file:") -> url
         url.startsWith("/") -> apiRoot + url
         else -> "$apiRoot/$url"
     }

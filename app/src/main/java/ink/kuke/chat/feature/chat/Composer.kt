@@ -120,7 +120,7 @@ fun Composer(
     onSent: () -> Unit,
     isGroup: Boolean = false,
     canMentionAll: Boolean = false,
-    /** 工具面板里除「图片」外的工具（poll / redPacket / gift / poke）交给聊天页去开面板 */
+    /** 工具面板里的工具（image / poll / redPacket / gift / poke）交给聊天页去开面板 */
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
@@ -213,26 +213,21 @@ fun Composer(
     LaunchedEffect(imeHeight > 0) { if (imeHeight > 0) panel = Panel.None }
     BackHandler(enabled = panel != Panel.None) { panel = Panel.None }
 
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) scope.launch { if (controller.sendImage(context, uri)) onSent() }
-    }
-
+    // 乐观发送：点了就清空输入框、消息立刻出现在列表末尾（发送中 / 失败的状态画在消息旁边），不等接口，可以连发
     fun send() {
         val text = value.text.trim()
         if (text.isEmpty()) return
-        scope.launch {
-            val finalText = value.text.trimEnd()
-            val usedMentions = mentions.filter { (_, name) -> finalText.contains("@$name") }.distinctBy { it.first }
-            val all = canMentionAll && finalText.contains("@全体成员")
-            if (controller.sendText(finalText, usedMentions, all)) {
-                value = TextFieldValue("")
-                mentions.clear()
-                Drafts.set(controller.conversationId, "")
-                ink.kuke.chat.ui.components.Haptics.confirm(view)
-                onSent()
-            } else {
-                ink.kuke.chat.ui.components.Haptics.reject(view)
-            }
+        val finalText = value.text.trimEnd()
+        val usedMentions = mentions.filter { (_, name) -> finalText.contains("@$name") }.distinctBy { it.first }
+        val all = canMentionAll && finalText.contains("@全体成员")
+        if (controller.sendText(finalText, usedMentions, all)) {
+            value = TextFieldValue("")
+            mentions.clear()
+            Drafts.set(controller.conversationId, "")
+            ink.kuke.chat.ui.components.Haptics.confirm(view)
+            onSent()
+        } else {
+            ink.kuke.chat.ui.components.Haptics.reject(view)
         }
     }
 
@@ -353,7 +348,7 @@ fun Composer(
                         Box(
                             Modifier.graphicsLayer { scaleX = 0.4f + 0.6f * sendT; scaleY = scaleX; alpha = swap.coerceIn(0f, 1f); rotationZ = -90f * (1f - swap.coerceIn(0f, 1f)) }
                                 .size(40.dp).pressScale(press, 0.84f).clip(RoundedCornerShape(13.dp)).background(colors.fill)
-                                .clickable(interactionSource = press, indication = null, enabled = hasText && !controller.sending.value) { send() },
+                                .clickable(interactionSource = press, indication = null, enabled = hasText) { send() },
                             contentAlignment = Alignment.Center,
                         ) { KcIcon(KcIcons.send, tint = colors.onFill, size = 18.dp, contentDescription = "发送") }
                     }
@@ -380,13 +375,13 @@ fun Composer(
                     val start = value.selection.start
                     val next = value.text.substring(0, start) + emoji + value.text.substring(value.selection.end)
                     value = TextFieldValue(next, TextRange(start + emoji.length))
-                }, onSticker = { url -> scope.launch { if (controller.sendSticker(url)) onSent() } },
-                    onGroupEmoji = { emoji -> scope.launch { if (controller.sendSticker(emoji.url, emoji.id)) onSent() } },
+                }, onSticker = { url -> if (controller.sendSticker(url)) onSent() },
+                    onGroupEmoji = { emoji -> if (controller.sendSticker(emoji.url, emoji.id)) onSent() },
                     onCollapse = { panel = Panel.None; requestInputFocus() })
                 Panel.Tools -> ToolsPanel(316.dp, isGroup) { tool ->
                     panel = Panel.None
                     when (tool) {
-                        "image" -> pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        // 「图片」交给聊天页：多选（最多 9 张）后弹确认面板，见 ImageSendSheet.kt
                         // @ 群成员 / 机器人指令：往输入框里放一个触发字符，面板自己弹出来
                         "mention" -> {
                             val start = value.selection.start

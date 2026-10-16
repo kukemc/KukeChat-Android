@@ -98,7 +98,7 @@ internal fun RepeatPill(enabled: Boolean, onClick: () -> Unit) {
 }
 
 /** 复读：原样把同一句 / 同一张表情再发一次 */
-internal suspend fun ChatController.repeat(content: RepeatContent): Boolean = when {
+internal fun ChatController.repeat(content: RepeatContent): Boolean = when {
     content.text != null -> sendText(content.text)
     content.stickerUrl != null -> sendSticker(content.stickerUrl, content.groupEmojiId)
     else -> false

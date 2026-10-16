@@ -51,8 +51,9 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     val loadingOlder = mutableStateOf(false)
     val reachedStart = mutableStateOf(false)
     val error = mutableStateOf<String?>(null)
-    val sending = mutableStateOf(false)
     val quote = mutableStateOf<QuoteDraft?>(null)
+    /** 这个会话发送中 / 发送失败的本地消息（进程内单例，离开聊天页也接着发） */
+    val outbox: ConversationOutbox = Outbox.of(graph, conversationId)
     private var listener: Job? = null
 
     /** 正在输入的人（用户 id → 名字）。服务端没有「停止输入」事件：对方输入时约 3 秒推一次，这边每次续 5 秒 */
@@ -127,6 +128,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
             initialLoaded.value = true
         }
         refreshPendingRedPackets(0)
+        outbox.listener = outboxListener
         listener?.cancel()
         listener = scope.launch {
             graph.realtime.events.collect { event ->
@@ -135,6 +137,8 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                     "message.created" -> decode(data)?.takeIf { it.conversationId == conversationId }?.let { incoming ->
                         // 话发出来了，不用等「正在输入」自己过期
                         incoming.senderId?.let { clearTyping(it) }
+                        // 自己刚发的那条（client_nonce 对上）：同一帧里摘掉本地那条、放进服务端这条 = 原地替换
+                        outbox.confirm(incoming)
                         upsert(incoming)
                         persist()
                         // 上下文模式下列表尾巴不是最新的那条：按收到的这条记已读
@@ -190,6 +194,23 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                 refreshPendingRedPackets(0)
             }
         }
+    }
+
+    private val outboxListener = object : ConversationOutbox.Listener {
+        override fun onConfirmed(message: Message) {
+            upsert(message)
+            persist()
+            if (!inContext) markRead()
+        }
+
+        override fun onFailed(reason: String) {
+            error.value = reason
+        }
+    }
+
+    /** 离开聊天页：发送队列照常跑，确认的消息改记进消息缓存 */
+    fun stop() {
+        if (outbox.listener === outboxListener) outbox.listener = null
     }
 
     private suspend fun loadLatest() {
@@ -353,103 +374,91 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         }
     }
 
-    /** 发文字。成功返回 true（输入框清空）。mentions 是文字里 @ 到的成员，mentionAll 是 @全体成员 */
-    suspend fun sendText(text: String, mentions: List<Pair<Long, String>> = emptyList(), mentionAll: Boolean = false): Boolean =
-        post(text, "text", baseMetadata(mentions, mentionAll))
+    // 乐观发送（Outbox.kt）：点发送立刻在列表末尾出现一条本地消息，后台上传、按顺序发出，回来后原地换成服务端那条。
+    // 发送不挡输入框，可以连发；失败的留在列表里，点一下重发
 
-    suspend fun sendImage(context: Context, uri: Uri): Boolean {
-        val upload = runCatching { uploadImage(context, uri) }.getOrElse {
-            error.value = it.userMessage()
-            return false
-        }
-        return post(upload, "image", baseMetadata())
+    /** 发文字。立刻返回 true（输入框清空）。mentions 是文字里 @ 到的成员，mentionAll 是 @全体成员 */
+    fun sendText(text: String, mentions: List<Pair<Long, String>> = emptyList(), mentionAll: Boolean = false): Boolean =
+        enqueue(PendingMessage.Kind.Text, text = text, meta = baseMetadata(mentions, mentionAll))
+
+    /** 发图片（1–9 张，可带一行说明）：合成一条消息。单张无说明是 type=image，否则是带 metadata.images 的文字消息 */
+    fun sendImages(uris: List<Uri>, caption: String = ""): Boolean {
+        if (uris.isEmpty()) return false
+        return enqueue(PendingMessage.Kind.Images, text = caption.trim(), images = uris.take(MAX_IMAGES).map(::OutgoingImage), meta = baseMetadata())
     }
 
     /** 发表情（收藏表情、表情包）：就是一条带 sticker 标记的图片消息 */
-    suspend fun sendSticker(url: String, groupEmojiId: Long? = null): Boolean {
+    fun sendSticker(url: String, groupEmojiId: Long? = null): Boolean {
         val meta = buildJsonObject {
             baseMetadata()?.forEach { (key, value) -> put(key, value) }
             put("sticker", true)
             // 本群表情：带上来源 id（同电脑版 stickerMessage）
             groupEmojiId?.let { put("group_emoji_id", it) }
         }
-        return post(url, "image", meta)
+        return enqueue(PendingMessage.Kind.Sticker, stickerUrl = url, meta = meta)
     }
 
-    suspend fun sendVoice(file: File, durationMs: Long, waveform: List<Int>): Boolean {
-        val uploaded = runCatching {
-            val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-                .addFormDataPart("file", file.name, file.readBytes().toRequestBody("audio/mp4".toMediaType()))
-                .build()
-            graph.api.upload("/uploads/message-voice", body)
-        }.getOrElse {
-            error.value = it.userMessage()
+    /** 发语音：录音文件发完就会被删，这里先把字节读进内存（重发要用） */
+    fun sendVoice(file: File, durationMs: Long, waveform: List<Int>): Boolean {
+        val bytes = runCatching { file.readBytes() }.getOrElse {
+            error.value = "读不到这段录音"
             return false
         }
-        val url = (uploaded as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull ?: return false
         val meta = buildJsonObject {
             baseMetadata()?.forEach { (key, value) -> put(key, value) }
             put("voice", buildJsonObject {
                 put("duration_ms", durationMs)
                 put("content_type", "audio/mp4")
-                put("size", file.length())
+                put("size", bytes.size)
                 put("waveform", buildJsonArray { waveform.forEach { add(JsonPrimitive(it)) } })
             })
         }
-        return post(url, "voice", meta)
+        return enqueue(PendingMessage.Kind.Voice, voice = OutgoingVoice(bytes, durationMs), meta = meta)
     }
 
-    private suspend fun post(content: String, type: String, metadata: JsonObject?): Boolean {
-        if (sending.value) return false
-        sending.value = true
-        return try {
-            val body = buildJsonObject {
-                put("content", content)
-                put("type", type)
-                metadata?.let { put("metadata", it) }
-            }
-            val sent = decode(graph.api.post("/conversations/$conversationId/messages", body))
-            sent?.let(::upsert)
-            quote.value = null
-            error.value = null
-            true
-        } catch (e: Exception) {
-            error.value = e.userMessage()
-            false
-        } finally {
-            sending.value = false
-        }
+    private fun enqueue(
+        kind: PendingMessage.Kind,
+        text: String = "",
+        images: List<OutgoingImage> = emptyList(),
+        stickerUrl: String? = null,
+        voice: OutgoingVoice? = null,
+        meta: JsonObject?,
+    ): Boolean {
+        val pending = PendingMessage(newClientNonce(), kind, text, images, stickerUrl, voice, meta)
+        val (type, content, metadata) = pending.previewShape()
+        // 发送人信息沿用自己上一条消息的（群名片、头衔、等级），换成服务端那条时名字那行不跳
+        val me = graph.session.session.value?.user
+        val last = messages.lastOrNull { it.senderId != null && it.senderId == myId && it.sender != null }
+        pending.preview = Message(
+            id = outbox.nextLocalId(),
+            conversationId = conversationId,
+            senderId = myId,
+            sender = last?.sender ?: me,
+            senderDisplayName = last?.senderDisplayName,
+            senderTitle = last?.senderTitle,
+            senderLevel = last?.senderLevel,
+            type = type,
+            content = content,
+            metadata = metadata,
+            createdAt = java.time.Instant.now().toString(),
+            clientNonce = pending.nonce,
+        )
+        quote.value = null
+        error.value = null
+        outbox.enqueue(pending)
+        return true
     }
 
-    /** 读出图片、压到服务端的上限以内（3MB、1200 万像素），GIF 原样上传；返回图片地址 */
-    internal suspend fun uploadImage(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
-        val resolver = context.contentResolver
-        val mime = resolver.getType(uri) ?: "image/jpeg"
-        val raw = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读不到这张图片")
-        val (bytes, type, ext) = if (mime == "image/gif" && raw.size <= MAX_IMAGE_BYTES) {
-            Triple(raw, "image/gif", "gif")
-        } else {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
-            var sample = 1
-            while (bounds.outWidth / sample > MAX_EDGE * 2 || bounds.outHeight / sample > MAX_EDGE * 2) sample *= 2
-            val decoded = BitmapFactory.decodeByteArray(raw, 0, raw.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("这不是一张能识别的图片")
-            val scale = minOf(1f, MAX_EDGE.toFloat() / maxOf(decoded.width, decoded.height))
-            val bitmap = if (scale < 1f) Bitmap.createScaledBitmap(decoded, (decoded.width * scale).toInt(), (decoded.height * scale).toInt(), true) else decoded
-            var quality = 88
-            var out: ByteArray
-            do {
-                out = ByteArrayOutputStream().use { stream -> bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream); stream.toByteArray() }
-                quality -= 10
-            } while (out.size > MAX_IMAGE_BYTES && quality > 30)
-            Triple(out, "image/jpeg", "jpg")
-        }
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", "image.$ext", bytes.toRequestBody(type.toMediaType()))
-            .build()
-        val uploaded = graph.api.upload("/uploads/message-image", body)
-        (uploaded as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull ?: error("上传没有返回地址")
+    /** 本地消息：重发（同一份内容，已上传的图复用地址）/ 删除 */
+    fun retryPending(pending: PendingMessage) {
+        error.value = null
+        outbox.retry(pending)
     }
+
+    fun discardPending(pending: PendingMessage) = outbox.discard(pending)
+
+    /** 读出图片、压缩、上传，返回图片地址（举报附图也用） */
+    internal suspend fun uploadImage(context: Context, uri: Uri): String = uploadMessageImage(graph, context, uri)
 
     // ------------------------------------------------------------ 操作
 
@@ -762,7 +771,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         const val PAGE = 50
         /** 跳转时目标前后各拉几条（同电脑版 getMessageContext before / after） */
         const val CONTEXT_SIDE = 25
-        private const val MAX_IMAGE_BYTES = 3 * 1024 * 1024
-        private const val MAX_EDGE = 2560
+        /** 一条消息最多几张图（后端不限，客户端限 9 张） */
+        const val MAX_IMAGES = 9
     }
 }

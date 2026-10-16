@@ -97,6 +97,8 @@ fun MessageActionsLayer(
     onReaction: (String) -> Unit,
     onAction: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** 发送中 / 失败的本地消息：只给这几个操作（重发、删除），也不出表情回应 */
+    pendingActions: List<MessageAction>? = null,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -127,7 +129,7 @@ fun MessageActionsLayer(
         ) {
             // 表情回应：收起是一行快捷表情 +「+」，展开是可滑动的分类面板（ReactionPicker.kt）。
             // 展开时把操作宫格收起来、抬起的消息压矮，面板最高占可用高度的一半多一点，菜单不会被挤出屏幕
-            ReactionPicker(
+            if (pendingActions == null) ReactionPicker(
                 message = message,
                 expanded = expanded,
                 onExpandedChange = { expanded = it },
@@ -141,7 +143,7 @@ fun MessageActionsLayer(
                 MessageRow(message = message, mine = mine, isGroup = isGroup, showName = isGroup, callbacks = noop)
             }
             // 操作宫格 5 × N（展开表情面板时收起）
-            val actions = actionsFor(message, mine, staff)
+            val actions = pendingActions ?: actionsFor(message, mine, staff)
             if (!expanded) Column(
                 Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
                     .widthIn(max = 320.dp).fillMaxWidth()

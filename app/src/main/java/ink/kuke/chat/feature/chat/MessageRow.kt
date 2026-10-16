@@ -2,6 +2,7 @@ package ink.kuke.chat.feature.chat
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.getValue
@@ -137,6 +138,9 @@ fun MessageRow(
     me: ink.kuke.chat.core.model.User? = null,
     /** 群里的成员角色和等级头衔（名字前的身份标签用）；不传就只显示等级和专属头衔 */
     identity: GroupIdentity? = null,
+    /** 发送中 / 发送失败的本地消息（乐观发送）：不能引用、回应；旁边画转圈或红色感叹号 */
+    pending: PendingMessage? = null,
+    onRetry: () -> Unit = {},
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -237,12 +241,14 @@ fun MessageRow(
                 Spacer(Modifier.width(8.dp))
             }
             if (mine && aside != null && !selecting) Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp)) { aside() }
+            // 发送状态：失败 = 红色感叹号（点一下重发）；文字等超过 1 秒还没确认才出现小转圈（图片的转圈叠在图上）
+            if (pending != null) Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp)) { PendingStatus(pending, onRetry) }
             // 引用手势只认按在消息上（名字、气泡、回应）起手的横划：整行的空白处留给外层的左右划（返回 / 打开资料）
             Column(
                 horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
                 modifier = Modifier.widthIn(max = 288.dp)
-                    .pointerInput(message.id, selecting, mine) {
-                        if (selecting) return@pointerInput
+                    .pointerInput(message.id, selecting, mine, pending != null) {
+                        if (selecting || pending != null) return@pointerInput
                         // 只认引用方向的横划：起手方向反了就不接手（不吃掉事件），交给外层的「右滑返回」
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
@@ -275,8 +281,21 @@ fun MessageRow(
                             callbacks.onLongPress(message)
                         })
                     },
-                ) { MessageBody(message, mine, callbacks, skin = rememberSenderSkin(message)) }
+                ) {
+                    MessageBody(
+                        message, mine, callbacks, skin = rememberSenderSkin(message),
+                        imageOverlay = pending?.takeIf { it.hasLocalImages && !it.failed }?.let { p -> { index -> UploadBadge(p, index) } },
+                    )
+                }
                 if (message.reactions.isNotEmpty()) Reactions(message, mine, callbacks)
+                if (pending?.failed == true) {
+                    Text(
+                        "发送失败，点击重发",
+                        style = type.caption,
+                        color = colors.danger,
+                        modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onRetry).padding(horizontal = 2.dp, vertical = 1.dp),
+                    )
+                }
             }
             if (!mine && aside != null && !selecting) Box(Modifier.align(Alignment.CenterVertically).padding(start = 6.dp)) { aside() }
             // 自己的消息：头像在右边（同 QQ / 电脑版），点它看自己的资料
@@ -370,7 +389,14 @@ private fun rememberSenderSkin(message: Message): ink.kuke.chat.feature.shop.Bub
 /** 消息正文。聊天页、精华、收藏、合并转发详情共用（只读场景见 SharedMessageView）。[skin] 只染文字气泡 */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCallbacks, skin: ink.kuke.chat.feature.shop.BubbleSkin? = null) {
+internal fun MessageBody(
+    message: Message,
+    mine: Boolean,
+    callbacks: MessageCallbacks,
+    skin: ink.kuke.chat.feature.shop.BubbleSkin? = null,
+    /** 叠在第 index 张图上的东西（发送中的上传转圈）。图片外面总是套一层 Box，有没有叠加结构都一样，换成服务端消息时图不重建 */
+    imageOverlay: (@Composable androidx.compose.foundation.layout.BoxScope.(Int) -> Unit)? = null,
+) {
     val colors = KcTheme.colors
     val type = KcTheme.type
     val baseRadius = ink.kuke.chat.feature.appearance.LocalAppearance.current.bubbleRadius
@@ -387,8 +413,10 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
         val sticker = Meta.isSticker(message)
         // 表情按自身比例放进 120dp 的框里：原图常常只有几十像素，按像素原样画在高密度屏上就只剩一点点
         var stickerAspect by remember(url) { mutableStateOf(1f) }
+        Box {
         AsyncImage(
-            model = url,
+            // 自己刚发的图：用本地那张（和发送中显示的是同一个缓存键）
+            model = LocalImages.model(message.content),
             contentDescription = if (sticker) "表情" else "图片",
             contentScale = ContentScale.Fit,
             onSuccess = { state ->
@@ -414,6 +442,8 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
                     },
                 ),
         )
+        imageOverlay?.invoke(this, 0)
+        }
         return
     }
 
@@ -505,7 +535,7 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
                 }
                 val images = Meta.images(message)
                 if (images.isNotEmpty()) {
-                    ImageGrid(images, callbacks)
+                    ImageGrid(images, callbacks, topGap = message.content.isNotBlank() || quote != null, overlay = imageOverlay)
                 }
             }
         }
@@ -516,16 +546,88 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ImageGrid(images: List<String>, callbacks: MessageCallbacks) {
-    FlowRow(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        images.forEach { raw ->
+private fun ImageGrid(
+    images: List<String>,
+    callbacks: MessageCallbacks,
+    topGap: Boolean = true,
+    overlay: (@Composable androidx.compose.foundation.layout.BoxScope.(Int) -> Unit)? = null,
+) {
+    // 多图：一行 3 张（84dp × 3 + 间距正好放进 264dp 的气泡内宽），4 张排成 2 × 2
+    FlowRow(
+        Modifier.padding(top = if (topGap) 6.dp else 0.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        maxItemsInEachRow = if (images.size == 4) 2 else 3,
+    ) {
+        images.forEachIndexed { index, raw ->
             val url = Meta.imageUrl(raw)
-            AsyncImage(
-                model = url,
-                contentDescription = "图片",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(if (images.size == 1) 200.dp else 86.dp).clip(RoundedCornerShape(8.dp)).clickable { url?.let(callbacks.onOpenImage) },
-            )
+            Box {
+                AsyncImage(
+                    model = LocalImages.model(raw),
+                    contentDescription = "图片",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(if (images.size == 1) 200.dp else 84.dp).clip(RoundedCornerShape(8.dp)).clickable { url?.let(callbacks.onOpenImage) },
+                )
+                overlay?.invoke(this, index)
+            }
+        }
+    }
+}
+
+/** 发送中的图片右下角：小圆底 + 细线转圈；拿得到上传进度时是一圈慢慢画满的环，传完了等确认时转圈 */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.UploadBadge(pending: PendingMessage, index: Int) {
+    val image = pending.images.getOrNull(index) ?: return
+    val progress = if (image.url == null && image.progress > 0f) image.progress else null
+    Box(
+        Modifier.align(Alignment.BottomEnd).padding(6.dp).size(22.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color.Black.copy(alpha = 0.34f)),
+        contentAlignment = Alignment.Center,
+    ) { SendSpinner(14.dp, Color.White.copy(alpha = 0.86f), progress) }
+}
+
+/** 气泡旁的发送状态：失败 = 红色感叹号；没有本地图的消息超过 1 秒还没确认才出现灰色小转圈 */
+@Composable
+private fun PendingStatus(pending: PendingMessage, onRetry: () -> Unit) {
+    val colors = KcTheme.colors
+    if (pending.failed) {
+        Box(
+            Modifier.size(22.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onRetry),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(17.dp).clip(androidx.compose.foundation.shape.CircleShape).background(colors.danger), contentAlignment = Alignment.Center) {
+                Text("!", style = KcTheme.type.caption.copy(fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.W800), color = Color.White)
+            }
+        }
+        return
+    }
+    if (pending.hasLocalImages) return
+    var slow by remember(pending, pending.attempt) { mutableStateOf(false) }
+    LaunchedEffect(pending, pending.attempt) {
+        val waited = android.os.SystemClock.uptimeMillis() - pending.startedAt
+        kotlinx.coroutines.delay((1000 - waited).coerceAtLeast(0))
+        slow = true
+    }
+    if (slow) SendSpinner(14.dp, colors.subtle, null)
+}
+
+/** 细线转圈（[progress] 不为空时画成进度环） */
+@Composable
+internal fun SendSpinner(size: Dp, color: Color, progress: Float?) {
+    val spin = androidx.compose.animation.core.rememberInfiniteTransition(label = "sendSpin")
+    val angle by spin.animateFloat(
+        0f, 360f,
+        androidx.compose.animation.core.infiniteRepeatable(tween(850, easing = androidx.compose.animation.core.LinearEasing)),
+        label = "sendSpinAngle",
+    )
+    Canvas(Modifier.size(size)) {
+        val stroke = 1.5.dp.toPx()
+        val inset = stroke / 2f
+        val arcSize = Size(this.size.width - stroke, this.size.height - stroke)
+        drawArc(color.copy(alpha = color.alpha * 0.22f), 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
+        if (progress != null) {
+            drawArc(color, -90f, 360f * progress.coerceIn(0.04f, 1f), false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        } else {
+            drawArc(color, angle - 90f, 100f, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
         }
     }
 }
@@ -680,10 +782,14 @@ private fun MessageCard(card: Meta.Card, onClick: (() -> Unit)? = null) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Reactions(message: Message, mine: Boolean, callbacks: MessageCallbacks) {
     val colors = KcTheme.colors
+    val haptics = LocalHapticFeedback.current
+    // 长按某个表情回应：列出都有谁回应了
+    var usersOf by remember(message.id) { mutableStateOf<String?>(null) }
+    usersOf?.let { emoji -> ReactionUsersSheet(message.reactions, emoji, onDismiss = { usersOf = null }) }
     FlowRow(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp, if (mine) Alignment.End else Alignment.Start), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         message.reactions.forEach { reaction ->
             Text(
@@ -694,7 +800,13 @@ private fun Reactions(message: Message, mine: Boolean, callbacks: MessageCallbac
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (reaction.reactedByMe) colors.accentSoft else colors.panel)
                     .border(1.dp, if (reaction.reactedByMe) colors.fill.copy(alpha = 0.4f) else colors.border, RoundedCornerShape(10.dp))
-                    .clickable { callbacks.onReaction(message, reaction.emoji) }
+                    .combinedClickable(
+                        onClick = { callbacks.onReaction(message, reaction.emoji) },
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            usersOf = reaction.emoji
+                        },
+                    )
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }

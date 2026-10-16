@@ -161,8 +161,31 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         graph.conversations.visibleConversationId = conversationId
         Notifier.cancel(context, conversationId)
         controller.start()
-        onDispose { if (graph.conversations.visibleConversationId == conversationId) graph.conversations.visibleConversationId = null }
+        onDispose {
+            controller.stop()
+            if (graph.conversations.visibleConversationId == conversationId) graph.conversations.visibleConversationId = null
+        }
     }
+
+    // ---------------------------------------------------------------- 发图：多选（最多 9 张）→ 确认面板 → 乐观发送
+    val imageDraft = remember { androidx.compose.runtime.mutableStateListOf<android.net.Uri>() }
+    var imageCaption by remember { mutableStateOf("") }
+    val pickImages = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(ChatController.MAX_IMAGES),
+    ) { uris ->
+        val fresh = uris.filter { it !in imageDraft }
+        val room = ChatController.MAX_IMAGES - imageDraft.size
+        imageDraft.addAll(fresh.take(room))
+        if (fresh.size > room) toast(context, "一次最多发 ${ChatController.MAX_IMAGES} 张")
+    }
+    fun pickMoreImages() = pickImages.launch(
+        androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly),
+    )
+    // 长按发送中 / 失败的本地消息：只有「重发」「删除」
+    var actingPending by remember { mutableStateOf<PendingMessage?>(null) }
+    val pendingItems = controller.outbox.items
+    // 上下文模式下列表尾巴不是最新，本地消息不接在后面（发送时会先回到最新）
+    val pendingShown = if (controller.inContext) emptyList() else pendingItems.toList()
 
     // 一句话提示
     controller.notice.value?.let { text ->
@@ -261,6 +284,11 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         if (atBottom) lastSeenNewest = newest
     }
     LaunchedEffect(atBottom) { if (atBottom) lastSeenNewest = newest }
+    // 刚点了发送：本地那条接在最末尾，贴底
+    val newestPending = pendingShown.lastOrNull()?.nonce
+    LaunchedEffect(newestPending) { if (newestPending != null) listState.animateScrollToItem(0) }
+    // 长按菜单开着时那条已经发出去了：关掉（它已经是普通消息了）
+    if (actingPending != null && pendingItems.none { it === actingPending }) actingPending = null
 
     // 「+1」复读：群聊里最后两条内容相同时挂在最新那条旁边
     val repeat by remember(controller, isGroup) { derivedStateOf { if (isGroup && !controller.inContext) repeatTarget(controller.messages) else null } }
@@ -325,6 +353,24 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         )
     }
 
+    // 本地消息（发送中 / 失败）：不能引用、回应、转发；长按只给「重发」「删除」，点图照常看大图
+    val pendingCallbacks = remember(controller) {
+        MessageCallbacks(
+            onLongPress = { message ->
+                focusManager.clearFocus()
+                keyboardController?.hide()
+                actingPending = controller.outbox.items.firstOrNull { it.preview.id == message.id }
+            },
+            onQuote = {},
+            onOpenImage = { viewing = it },
+            onReaction = { _, _ -> },
+            onAvatar = { message -> message.senderId?.let { cardUserId = it } },
+            onJumpToQuote = { id -> jumpTo(id) },
+        )
+    }
+    // 发出去以后：上下文模式下先回到最新，否则贴底
+    val afterSend: () -> Unit = { if (controller.inContext) goLatest() else scope.launch { listState.animateScrollToItem(0) } }
+
     androidx.compose.runtime.CompositionLocalProvider(LocalUriHandler provides inviteUriHandler) {
     Box(Modifier.fillMaxSize()) {
         // 长按菜单打开时下层模糊（设计稿 P04：backdrop-filter blur 6）
@@ -366,7 +412,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { nav.go(UserRoute(it.id)) }
                 }),
             ) {
-                val reversed = messages.asReversed()
+                // 倒排（最新在前）：本地消息（发送中 / 失败）排在所有服务端消息之后。
+                // key：本地那条是 "n:nonce"，换成服务端消息后沿用同一个 key（outbox.keyOf），原地替换不闪不跳
+                val reversed = pendingShown.asReversed().map { ChatEntry(it.preview, it) } + messages.asReversed().map { ChatEntry(it, null) }
                 LazyColumn(
                     state = listState,
                     reverseLayout = true,
@@ -375,8 +423,10 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     // 设计稿 .msgs：消息之间 14dp
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    itemsIndexed(reversed, key = { _, message -> message.id }) { index, message ->
-                        val older = reversed.getOrNull(index + 1)
+                    itemsIndexed(reversed, key = { _, entry -> entry.pending?.let(controller.outbox::keyOf) ?: controller.outbox.keyOf(entry.message) }) { index, entry ->
+                        val message = entry.message
+                        val pending = entry.pending
+                        val older = reversed.getOrNull(index + 1)?.message
                         Column {
                             if (older == null || gapMinutes(older, message) >= 5) TimeDivider(message.createdAt)
                             if (message.id == controller.newDividerId.value) NewMessagesDivider()
@@ -386,21 +436,23 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                                 mine = message.senderId == me?.id,
                                 isGroup = isGroup,
                                 showName = isGroup,
-                                callbacks = callbacks,
+                                callbacks = if (pending != null) pendingCallbacks else callbacks,
                                 me = me,
                                 identity = groupIdentity,
-                                selecting = selecting,
+                                selecting = selecting && pending == null,
                                 selected = message.id in controller.selected,
                                 shakeToken = poked?.takeIf { it.userId == message.senderId }?.token ?: 0,
                                 flashToken = flash?.takeIf { it.first == message.id }?.second ?: 0,
                                 aside = repeatHere?.let { content ->
                                     {
-                                        RepeatPill(enabled = !controller.sending.value) {
+                                        RepeatPill(enabled = true) {
                                             Haptics.tick(view)
-                                            scope.launch { if (controller.repeat(content)) listState.animateScrollToItem(0) }
+                                            if (controller.repeat(content)) afterSend()
                                         }
                                     }
                                 },
+                                pending = pending,
+                                onRetry = { pending?.let(controller::retryPending) },
                             )
                             if (isGameMessage(message)) GameSourceNote(message.senderId == me?.id)
                         }
@@ -494,11 +546,15 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 else -> Composer(
                     controller = controller,
                     placeholder = if (isGroup) "发消息，@ 可以提醒群成员" else "发消息",
-                    onSent = { if (controller.inContext) goLatest() else scope.launch { listState.animateScrollToItem(0) } },
+                    onSent = afterSend,
                     isGroup = isGroup,
                     canMentionAll = staff,
                     dismissToken = composerDismiss,
                     onTool = { tool ->
+                        if (tool == "image") {
+                            pickMoreImages()
+                            return@Composer
+                        }
                         overlay = when (tool) {
                             "poll" -> Overlay.PollCreate
                             "redPacket" -> Overlay.RedPacketSend
@@ -513,6 +569,49 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
 
         cardUserId?.let { id ->
             ink.kuke.chat.feature.user.UserCardSheet(graph, id, conversationId) { cardUserId = null }
+        }
+        // 选好的图：先确认（可去掉、继续添加、加一行说明），点发送才合成一条消息乐观发出
+        if (imageDraft.isNotEmpty()) {
+            val closeDraft = {
+                imageDraft.clear()
+                imageCaption = ""
+            }
+            ImageSendSheet(
+                images = imageDraft.toList(),
+                caption = imageCaption,
+                onCaption = { imageCaption = it },
+                onRemove = { imageDraft.remove(it) },
+                onAdd = if (imageDraft.size < ChatController.MAX_IMAGES) ({ pickMoreImages() }) else null,
+                onCancel = closeDraft,
+                onSend = {
+                    if (controller.sendImages(imageDraft.toList(), imageCaption)) {
+                        Haptics.confirm(view)
+                        afterSend()
+                    }
+                    closeDraft()
+                },
+            )
+        }
+        actingPending?.let { pending ->
+            MessageActionsLayer(
+                message = pending.preview,
+                isGroup = isGroup,
+                mine = true,
+                staff = false,
+                onReaction = {},
+                onAction = { key ->
+                    when (key) {
+                        "retry" -> controller.retryPending(pending)
+                        "delete" -> controller.discardPending(pending)
+                    }
+                    actingPending = null
+                },
+                onDismiss = { actingPending = null },
+                pendingActions = buildList {
+                    if (pending.failed) add(MessageAction("retry", "重发", KcIcons.refresh))
+                    add(MessageAction("delete", "删除", KcIcons.trash, danger = true))
+                },
+            )
         }
         acting?.let { message ->
             val mine = message.senderId == me?.id
