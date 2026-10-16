@@ -1,0 +1,15 @@
+<resources>
+    <!-- 窗口本身只管启动瞬间的底色；界面全部由 Compose 画（ui/theme） -->
+    <style name="Theme.KukeChat" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/kc_list</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- 启动画面（读登录状态的那一瞬间），之后换成上面的主题 -->
+    <style name="Theme.KukeChat.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/kc_list</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.KukeChat</item>
+    </style>
+</resources>

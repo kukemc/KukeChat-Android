@@ -1,0 +1,11 @@
+# 本地配置：SDK 路径、服务器地址（来自 KukeChat-Client/.env），不入库
+local.properties
+keystore.properties
+*.jks
+*.keystore
+.gradle/
+build/
+.idea/
+*.iml
+.kotlin/
+captures/

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只在开发版里：从电脑用 adb 注入一条模拟消息，测通知（正式版没有这个入口） -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true">
+        <!-- 只在开发版：直接显示登录页（不改登录状态），用来在真机上核对界面 -->
+        <activity
+            android:name=".debug.LoginPreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.KukeChat"
+            android:windowSoftInputMode="adjustResize" />
+        <receiver
+            android:name=".debug.DebugReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver"
+            xmlns:tools="http://schemas.android.com/tools">
+            <intent-filter>
+                <action android:name="ink.kuke.chat.DEBUG_FAKE_MESSAGE" />
+                <action android:name="ink.kuke.chat.DEBUG_DUMP" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
