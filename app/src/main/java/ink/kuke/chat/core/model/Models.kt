@@ -34,6 +34,8 @@ data class Reaction(
     val emoji: String,
     val count: Int = 0,
     @SerialName("reacted_by_me") val reactedByMe: Boolean = false,
+    /** 回应了这个表情的人（长按表情回应时列出来） */
+    val users: List<User> = emptyList(),
 )
 
 @Serializable
@@ -52,6 +54,8 @@ data class Message(
     @SerialName("recalled_at") val recalledAt: String? = null,
     val reactions: List<Reaction> = emptyList(),
     val featured: Boolean = false,
+    /** 发送时带的随机串，POST 返回和 message.created 原样回显（不落库，历史接口里为 null）：乐观发送靠它认领本地那条 */
+    @SerialName("client_nonce") val clientNonce: String? = null,
 ) {
     val isRecalled: Boolean get() = recalledAt != null
     val senderName: String get() = senderDisplayName?.takeIf { it.isNotBlank() } ?: sender?.displayName ?: "用户 ${senderId ?: 0}"
