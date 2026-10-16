@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import ink.kuke.chat.feature.shop.bubbleSkin
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -437,7 +438,7 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
     Column(
         Modifier
             .then(if (isVoice) Modifier.pressScale(voicePress, 0.97f) else Modifier)
-            .then(if (skinPaint != null) Modifier.skinBackground(skinPaint, shape) else Modifier.shadow(if (mine) 0.dp else 1.dp, shape).background(if (mine) colors.bubbleOut else colors.bubbleIn, shape))
+            .then(if (skinPaint != null && skin != null) Modifier.bubbleSkin(skin, skinPaint, shape, message.id) else Modifier.shadow(if (mine) 0.dp else 1.dp, shape).background(if (mine) colors.bubbleOut else colors.bubbleIn, shape))
             .then(if (isVoice) Modifier.clip(shape).clickable(interactionSource = voicePress, indication = null) { VoicePlayer.toggle(message) } else Modifier)
             .padding(if (pill) PaddingValues(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp) else PaddingValues(horizontal = 12.dp, vertical = 8.dp)),
     ) {
@@ -471,14 +472,6 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
             }
         }
     }
-}
-
-/** 皮肤底色 + 边框（brush 跟着 paint 记住） */
-@Composable
-private fun Modifier.skinBackground(paint: ink.kuke.chat.feature.shop.SkinPaint, shape: RoundedCornerShape): Modifier {
-    val brush = remember(paint) { paint.fill.toBrush() }
-    val border = paint.border
-    return this.background(brush, shape).then(if (border != null) Modifier.border(border.second.dp, border.first, shape) else Modifier)
 }
 
 @OptIn(ExperimentalLayoutApi::class)

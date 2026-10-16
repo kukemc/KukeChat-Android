@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ink.kuke.chat.feature.shop.parseAvatarFrame
 import ink.kuke.chat.feature.shop.parseBubbleSkin
+import ink.kuke.chat.feature.shop.frameDecor
 import ink.kuke.chat.feature.shop.toBrush
 import ink.kuke.chat.ui.components.Avatar
 import ink.kuke.chat.ui.icons.KcIcon
@@ -64,33 +65,21 @@ fun GiftThing(gift: GiftRef?, item: GiftItemRef?, size: Dp, modifier: Modifier =
     }
 }
 
-/** 套了头像框的头像。框的尺寸按 40dp 头像定，这里按比例放大；有光晕时在外圈晕一层 */
+/** 套了头像框的头像。框的尺寸按 40dp 头像定，按比例放大；画法和聊天里的头像框一样（SkinDraw.kt 的 frameDecor） */
 @Composable
 fun FramedAvatar(style: kotlinx.serialization.json.JsonElement?, wearer: Wearer?, avatarSize: Dp, modifier: Modifier = Modifier) {
     val frame = remember(style) { parseAvatarFrame(style) }
     val k = avatarSize.value / 40f
     val ring = ((frame?.width ?: 0f) * k).dp
     val gap = ((frame?.gap ?: 0f) * k).dp
-    val brush = remember(frame) { frame?.ring?.toBrush() }
-    val glow = frame?.glow
-    Box(
-        modifier
-            .size(avatarSize + (ring + gap) * 2)
-            .drawBehind {
-                if (glow != null) {
-                    val r = size.minDimension / 2
-                    drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.55f * glow.alpha), Color.Transparent), center = Offset(size.width / 2, size.height / 2), radius = r * 1.32f), radius = r * 1.32f)
+    Box(modifier.size(avatarSize + (ring + gap) * 2), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(avatarSize).let { if (frame != null) it.frameDecor(frame, rounded = false, seed = wearer?.id ?: 0L) else it }) {
+            if (wearer != null) {
+                Avatar(wearer.avatarUrl, wearer.name, wearer.id, avatarSize)
+            } else {
+                Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFFF06595)), contentAlignment = Alignment.Center) {
+                    Text("礼", color = Color.White, fontSize = (avatarSize.value * 0.4f).sp)
                 }
-            }
-            .let { if (brush != null) it.border(ring, brush, CircleShape) else it }
-            .padding(ring + gap),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (wearer != null) {
-            Avatar(wearer.avatarUrl, wearer.name, wearer.id, avatarSize)
-        } else {
-            Box(Modifier.size(avatarSize).clip(CircleShape).background(Color(0xFFF06595)), contentAlignment = Alignment.Center) {
-                Text("礼", color = Color.White, fontSize = (avatarSize.value * 0.4f).sp)
             }
         }
     }

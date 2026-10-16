@@ -59,7 +59,7 @@ fun Avatar(url: String?, name: String, tone: Long, size: Dp = 48.dp, modifier: M
     }
     val rounded = ink.kuke.chat.feature.appearance.LocalAppearance.current.avatarShape == ink.kuke.chat.feature.appearance.AvatarShape.Rounded
     if (frame != null) {
-        Box(modifier.size(size).frameDecor(frame, rounded)) {
+        Box(modifier.size(size).frameDecor(frame, rounded, seed = tone)) {
             Avatar(url, name, tone, size)
         }
         return

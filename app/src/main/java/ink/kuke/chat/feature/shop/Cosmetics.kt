@@ -1,23 +1,14 @@
 package ink.kuke.chat.feature.shop
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.model.User
 import ink.kuke.chat.core.net.KcJson
-import ink.kuke.chat.ui.components.rememberReducedMotion
-import ink.kuke.chat.ui.theme.KcTheme
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -114,22 +105,6 @@ fun rememberAvatarFrame(userId: Long?, payload: JsonObject?): AvatarFrame? {
 fun rememberBubbleSkin(userId: Long?, payload: JsonObject?): BubbleSkin? {
     val cosmetics = Cosmetics.of(userId, payload)
     return remember(cosmetics) { Cosmetics.bubble(cosmetics) }
-}
-
-/** 头像外圈的装饰：颜色按深浅色取，spin 的圆环在不减少动态效果时慢慢转 */
-@Composable
-fun Modifier.frameDecor(frame: AvatarFrame, rounded: Boolean): Modifier {
-    val dark = KcTheme.colors.isDark
-    val fill = frame.ringFor(dark)
-    val brush = remember(fill) { fill.toBrush() }
-    val glow = frame.glowFor(dark)
-    val reduced = rememberReducedMotion()
-    if (frame.spin && !rounded && !reduced && fill is SkinFill.Conic) {
-        // 只在绘制阶段读角度：转动只重画，不重组
-        val turn = rememberInfiniteTransition(label = "frameSpin").animateFloat(0f, 360f, infiniteRepeatable(tween(6000, easing = LinearEasing), RepeatMode.Restart), label = "frameSpinT")
-        return this.avatarFrame(frame, brush, glow, rounded) { turn.value }
-    }
-    return this.avatarFrame(frame, brush, glow, rounded)
 }
 
 /**

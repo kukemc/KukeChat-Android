@@ -8,6 +8,11 @@
             android:exported="true"
             android:theme="@style/Theme.KukeChat"
             android:windowSoftInputMode="adjustResize" />
+        <!-- 只在开发版：把示例气泡皮肤、头像框画出来，和电脑版对照（纯展示） -->
+        <activity
+            android:name=".debug.SkinPreviewActivity"
+            android:exported="true"
+            android:theme="@style/Theme.KukeChat" />
         <receiver
             android:name=".debug.DebugReceiver"
             android:exported="true"
