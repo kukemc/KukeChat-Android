@@ -128,6 +128,15 @@ fun redPacketStatusText(status: String?): String = when (status) {
     else -> ""
 }
 
+/** GET /red-packets/pending 的一项：我还能领的红包（不带金额）。聊天页「N 个红包未领」用 */
+data class PendingRedPacket(val id: Long, val messageId: Long, val kind: String, val expiresAt: Instant?, val createdAt: Instant?)
+
+fun parsePendingRedPacket(obj: JsonObject): PendingRedPacket? {
+    val id = obj.l("id") ?: return null
+    val messageId = obj.l("message_id") ?: return null
+    return PendingRedPacket(id, messageId, obj.s("kind") ?: "normal", parseInstant(obj.s("expires_at")), parseInstant(obj.s("created_at")))
+}
+
 private fun displayName(user: JsonObject?): String =
     user?.s("display_name")?.takeIf { it.isNotBlank() } ?: user?.s("nickname")?.takeIf { it.isNotBlank() } ?: user?.s("username")?.takeIf { it.isNotBlank() } ?: "用户"
 

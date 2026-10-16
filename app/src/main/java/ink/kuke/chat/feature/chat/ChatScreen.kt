@@ -101,7 +101,6 @@ private sealed interface Overlay {
     data object Search : Overlay
     data object Featured : Overlay
     data object Bookmarks : Overlay
-    data class Context(val messageId: Long) : Overlay
     data class Forward(val ids: List<Long>) : Overlay
     data class Bundle(val message: Message) : Overlay
     data class Voters(val poll: PollData) : Overlay
@@ -139,8 +138,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var cardUserId by remember { mutableStateOf<Long?>(null) }
     var viewing by remember { mutableStateOf<String?>(null) }
-    // 从聊天记录搜索跳进来：直接打开那条消息的上下文页并高亮
-    var overlay by remember { mutableStateOf<Overlay?>(focusMessageId?.let { Overlay.Context(it) }) }
+    var overlay by remember { mutableStateOf<Overlay?>(null) }
     // 群文件消息卡片、「去升级」提示
     var openFile by remember { mutableStateOf<Message?>(null) }
     var upgradeHint by remember { mutableStateOf<String?>(null) }
@@ -179,16 +177,85 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
 
     BackHandler(enabled = selecting) { controller.stopSelecting() }
 
-    // 列表是倒着排的（最新在 index 0）：翻到最后几项就加载更早的
+    // ---------------------------------------------------------------- 跳转到某条消息（同电脑版 jumpToMessage）
+    // 目标已加载：滚到屏幕中间并闪一下；没加载：拉它前后各 25 条换掉列表、进入上下文模式，再居中 + 闪一下
+    var jumping by remember { mutableStateOf(false) }
+    var flash by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var flashSeq by remember { mutableIntStateOf(0) }
+    var jumpJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun jumpTo(messageId: Long) {
+        jumpJob?.cancel()
+        jumpJob = scope.launch {
+            jumping = true
+            try {
+                val problem = controller.jumpTo(messageId)
+                if (problem != null) {
+                    if (problem.isNotBlank()) toast(context, problem)
+                    return@launch
+                }
+                if (listState.centerOn(messages, messageId)) {
+                    val token = ++flashSeq
+                    flash = messageId to token
+                    // 闪完就清掉：不然这条滑出去再滑回来（重新进组合）会再闪一次
+                    scope.launch {
+                        kotlinx.coroutines.delay(1700)
+                        if (flash?.second == token) flash = null
+                    }
+                    // 目标附近的图片陆续加载会把它挤走：稍后再对一次中（用户已经在滑就不管了）
+                    kotlinx.coroutines.delay(450)
+                    if (!listState.isScrollInProgress) listState.centerOn(messages, messageId)
+                }
+            } finally {
+                jumping = false
+            }
+        }
+    }
+    /** 「回到最新」：上下文模式下换回最新一页，否则滚到底 */
+    fun goLatest() {
+        jumpJob?.cancel()
+        scope.launch {
+            if (controller.inContext) {
+                controller.resetToLatest()
+                repeat(2) { androidx.compose.runtime.withFrameNanos { } }
+                listState.scrollToItem(0)
+            } else {
+                listState.animateScrollToItem(0)
+            }
+        }
+    }
+    // 带着目标消息进来（全局搜索、收藏）：等第一页拉完再跳
+    var focusConsumed by remember { mutableStateOf(false) }
+    LaunchedEffect(focusMessageId, controller.initialLoaded.value) {
+        if (focusMessageId != null && !focusConsumed && controller.initialLoaded.value) {
+            focusConsumed = true
+            kotlinx.coroutines.delay(80)
+            jumpTo(focusMessageId)
+        }
+    }
+    // 已经开着这个会话时，从上层页面（全局搜索）发来的跳转
+    LaunchedEffect(controller) {
+        snapshotFlow { ChatJumps.pending.value to controller.initialLoaded.value }.collect { (request, loaded) ->
+            if (request != null && request.first == conversationId && loaded) {
+                ChatJumps.pending.value = null
+                jumpTo(request.second)
+            }
+        }
+    }
+
+    // 列表是倒着排的（最新在 index 0）：翻到最后几项就加载更早的；上下文模式下滑到底附近就往后补
     LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
-            if (messages.isNotEmpty() && last >= messages.size - 5) controller.loadOlder()
+        snapshotFlow { ListProbe(listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, listState.firstVisibleItemIndex, jumping, controller.contextEdgeId.value, controller.loadingNewer.value) }.collect { probe ->
+            if (probe.jumping) return@collect
+            if (messages.isNotEmpty() && probe.last >= messages.size - 5) controller.loadOlder()
+            if (probe.edge != null && !probe.loadingNewer && probe.first <= 3) controller.loadNewerContext()
         }
     }
     val atBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 1 } }
     var lastSeenNewest by remember { mutableStateOf(0L) }
     val newest = messages.lastOrNull()?.id ?: 0L
     LaunchedEffect(newest) {
+        // 跳转换列表、上下文模式往后补页时不跟（底部不是真正的最新，跟下去会一路连锁加载）
+        if (jumping || controller.inContext) return@LaunchedEffect
         // 在底部（或者是自己发的）时自动跟到最新；不在底部就只亮「回到最新」
         if (atBottom || messages.lastOrNull()?.senderId == me?.id) listState.animateScrollToItem(0)
         if (atBottom) lastSeenNewest = newest
@@ -196,7 +263,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     LaunchedEffect(atBottom) { if (atBottom) lastSeenNewest = newest }
 
     // 「+1」复读：群聊里最后两条内容相同时挂在最新那条旁边
-    val repeat by remember(controller, isGroup) { derivedStateOf { if (isGroup) repeatTarget(controller.messages) else null } }
+    val repeat by remember(controller, isGroup) { derivedStateOf { if (isGroup && !controller.inContext) repeatTarget(controller.messages) else null } }
     // 聊天里点到邀请链接：进应用内的邀请页
     val inviteUriHandler = remember(uriHandler, nav) { InviteAwareUriHandler(uriHandler) { token -> nav.go(ink.kuke.chat.ui.shell.InviteRoute(token)) } }
 
@@ -237,12 +304,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             // 点头像：用户名片由 feature/user 提供，这里先进用户主页
             // 设计稿 P30：点头像弹底部用户名片（名片里有「个人主页」入口），不再整页跳走
             onAvatar = { message -> message.senderId?.let { cardUserId = it } },
-            onJumpToQuote = { id ->
-                val reversed = messages.asReversed()
-                val target = reversed.indexOfFirst { it.id == id }
-                if (target >= 0) scope.launch { listState.animateScrollToItem(target) }
-                else overlay = Overlay.Context(id)
-            },
+            onJumpToQuote = { id -> jumpTo(id) },
             onAvatarDoubleTap = { message -> message.senderId?.takeIf { it != me?.id }?.let(controller::poke) },
             onVote = { message, poll, ids -> controller.vote(message, poll.id, ids) },
             onClosePoll = { message, poll -> controller.closePoll(message, poll.id) },
@@ -329,6 +391,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                                 selecting = selecting,
                                 selected = message.id in controller.selected,
                                 shakeToken = poked?.takeIf { it.userId == message.senderId }?.token ?: 0,
+                                flashToken = flash?.takeIf { it.first == message.id }?.second ?: 0,
                                 aside = repeatHere?.let { content ->
                                     {
                                         RepeatPill(enabled = !controller.sending.value) {
@@ -343,6 +406,11 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     }
                     if (controller.loadingOlder.value) item { Text("正在加载更早的消息…", style = type.caption, color = colors.subtle, modifier = Modifier.fillMaxWidth().padding(8.dp)) }
                 }
+                // 上下文模式往后补页时，底边一行小字（倒排列表里加在最前面会挤动锚点，所以浮在底边上）
+                if (controller.loadingNewer.value) Text(
+                    "正在加载更新的消息…", style = type.caption, color = colors.subtle,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
+                )
                 // 群公告条：设计稿里是浮在画布顶部的圆角卡（上 8 / 左右 10、高 40、圆角 12、柔影），不是通栏
                 conversation?.announcement?.takeIf { it.isNotBlank() && conversation.isGroup }?.let { ann ->
                     Row(
@@ -361,15 +429,32 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     }
                 }
                 GiftStageArea(giftStage)
-                // 回到最新（右下胶囊）
-                if (!atBottom && newest > lastSeenNewest) Box(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
-                    Text(
-                        "有新消息",
-                        style = type.caption,
-                        color = colors.onFill,
-                        modifier = Modifier.shadow(4.dp, RoundedCornerShape(16.dp)).clip(RoundedCornerShape(16.dp)).background(colors.fill)
-                            .clickable { scope.launch { listState.animateScrollToItem(0) } }.padding(horizontal = 14.dp, vertical = 8.dp),
+                // 「N 个红包未领」：右上角（有群公告卡时在它下面），点一下跳到那条红包，多个就从最早的开始逐个轮
+                if (!selecting) {
+                    val hasAnnouncement = conversation?.isGroup == true && !conversation.announcement.isNullOrBlank()
+                    PendingRedPacketPill(
+                        controller = controller,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (hasAnnouncement) 56.dp else 10.dp, end = 12.dp),
+                        onJump = { jumpTo(it) },
                     )
+                }
+                // 回到最新（右下胶囊）：上下文模式下一直在，点了直接换回最新一页；平时有新消息才出现
+                val showLatest = controller.inContext || (!atBottom && newest > lastSeenNewest)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showLatest && !selecting,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                    enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(160)) + androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(200)) { it / 3 },
+                    exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(140)) + androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(160)) { it / 3 },
+                ) {
+                    InkCapsule(onClick = { goLatest() }) {
+                        KcIcon(KcIcons.arrowDown, tint = colors.panel, size = 14.dp)
+                        Text(
+                            if (controller.inContext) "回到最新" else "有新消息",
+                            style = type.caption.copy(fontWeight = FontWeight.W600),
+                            color = colors.panel,
+                            modifier = Modifier.padding(start = 5.dp),
+                        )
+                    }
                 }
             }
             controller.error.value?.let {
@@ -408,7 +493,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 else -> Composer(
                     controller = controller,
                     placeholder = if (isGroup) "发消息，@ 可以提醒群成员" else "发消息",
-                    onSent = { scope.launch { listState.animateScrollToItem(0) } },
+                    onSent = { if (controller.inContext) goLatest() else scope.launch { listState.animateScrollToItem(0) } },
                     isGroup = isGroup,
                     canMentionAll = staff,
                     dismissToken = composerDismiss,
@@ -500,13 +585,13 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                         }
                     },
                 )
-                Overlay.Search -> ChatSearchPage(controller, onBack = close, onJump = { overlay = Overlay.Context(it.id) })
+                Overlay.Search -> ChatSearchPage(controller, onBack = close, onJump = { overlay = null; jumpTo(it.id) })
                 Overlay.Featured -> FeaturedMessagesPage(
                     graph = graph,
                     conversationId = conversationId,
                     staff = staff,
                     onBack = close,
-                    onJump = { overlay = Overlay.Context(it) },
+                    onJump = { overlay = null; jumpTo(it) },
                     onUpgrade = {
                         overlay = null
                         nav.go(GroupPlusRoute(conversationId, reason = "featured"))
@@ -517,10 +602,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     emptyText = "还没有收藏的消息。长按消息可以收藏。",
                     graph = graph,
                     onBack = close,
-                    onJump = { overlay = Overlay.Context(it.id) },
+                    onJump = { overlay = null; jumpTo(it.id) },
                     load = { parseMessagesLoose(graph.api.get("/conversations/$conversationId/bookmarks")) },
                 )
-                is Overlay.Context -> MessageContextPage(controller, current.messageId, me?.id, isGroup, onBack = close, onOpenImage = { viewing = it })
                 is Overlay.Bundle -> BundleDetailPage(current.message, onBack = close, onOpenImage = { viewing = it })
                 is Overlay.Forward -> ForwardTargetSheet(controller, current.ids.size, onDismiss = close) { target, note ->
                     scope.launch {

@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import ink.kuke.chat.feature.shop.bubbleSkin
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -126,7 +127,8 @@ fun MessageRow(
     selected: Boolean = false,
     /** 头像被戳时自增，驱动一次抖动 */
     shakeToken: Int = 0,
-    highlighted: Boolean = false,
+    /** 跳转到这条时自增：一层浅浅的墨色底淡入、停一下、淡出（共约 1.6 秒，同电脑版 kcd-flash） */
+    flashToken: Int = 0,
     /** 贴在气泡外侧的小部件（「+1」复读）：别人的消息在右手边，自己的在左手边 */
     aside: (@Composable () -> Unit)? = null,
     /** 当前登录用户：自己的消息用它画右侧头像（发送中的消息还没有 sender）；不传就用消息里的 sender */
@@ -148,8 +150,26 @@ fun MessageRow(
         for (target in listOf(-7f, 7f, -5f, 5f, -2f, 0f)) shake.animateTo(target, tween(55))
     }
 
+    val flash = remember { Animatable(0f) }
+    LaunchedEffect(flashToken) {
+        if (flashToken == 0) return@LaunchedEffect
+        flash.snapTo(0f)
+        flash.animateTo(1f, tween(160))
+        kotlinx.coroutines.delay(560)
+        flash.animateTo(0f, tween(880))
+    }
+    val flashColor = colors.text.copy(alpha = if (colors.isDark) 0.10f else 0.065f)
+    val flashModifier = Modifier.drawBehind {
+        val a = flash.value
+        if (a > 0f) {
+            val dx = 8.dp.toPx()
+            val dy = 4.dp.toPx()
+            drawRoundRect(flashColor.copy(alpha = flashColor.alpha * a), topLeft = Offset(-dx, -dy), size = Size(size.width + dx * 2, size.height + dy * 2), cornerRadius = CornerRadius(12.dp.toPx()))
+        }
+    }
+
     if (message.type == "system" || message.isRecalled) {
-        Box(Modifier.fillMaxWidth().padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().then(flashModifier).padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
             Text(
                 if (message.isRecalled) "${if (mine) "你" else message.senderName} 撤回了一条消息" else message.content,
                 style = type.caption,
@@ -163,7 +183,7 @@ fun MessageRow(
     Box(
         Modifier
             .fillMaxWidth()
-            .then(if (highlighted) Modifier.clip(RoundedCornerShape(10.dp)).background(colors.accent.copy(alpha = 0.12f)) else Modifier)
+            .then(flashModifier)
             .then(if (selecting) Modifier.clickable { callbacks.onToggleSelect(message) } else Modifier),
     ) {
         // 引用手势的方向跟着消息走：我的消息（右边）向右划，别人的消息（左边）向左划；图标在露出的那一侧

@@ -155,7 +155,12 @@ internal sealed interface ClaimOutcome {
 }
 
 /** 红包读写：聊天页用 ChatController.redPackets 当缓存（卡片跟着变），记录页自带一份 */
-internal class RedPacketSource(private val graph: AppGraph, val cache: SnapshotStateMap<Long, RedPacketState>) {
+internal class RedPacketSource(
+    private val graph: AppGraph,
+    val cache: SnapshotStateMap<Long, RedPacketState>,
+    /** 领到了 / 确认领不了（抢完、过期、撤回、领过）：聊天页用它摘掉「N 个红包未领」里的这一个 */
+    private val onSettled: (Long) -> Unit = {},
+) {
     /** 拉最新状态；失败返回给人看的原因 */
     suspend fun load(id: Long): String? = try {
         graph.api.get("/red-packets/$id").asObj()?.let(::parseRedPacket)?.let { cache[id] = it }
@@ -171,6 +176,7 @@ internal class RedPacketSource(private val graph: AppGraph, val cache: SnapshotS
         val result = graph.api.post("/red-packets/$id/claim").asObj()
         result?.o("red_packet")?.let(::parseRedPacket)?.let { cache[id] = it }
         graph.conversations.refreshSoon()
+        onSettled(id)
         ClaimOutcome.Claimed(result?.i("amount") ?: 0)
     } catch (e: CancellationException) {
         throw e
@@ -179,10 +185,12 @@ internal class RedPacketSource(private val graph: AppGraph, val cache: SnapshotS
             "finished", "expired", "revoked" -> {
                 load(id)
                 graph.conversations.refreshSoon()
+                onSettled(id)
                 ClaimOutcome.Ended(e.code)
             }
             "already_claimed", "own_packet" -> {
                 load(id)
+                onSettled(id)
                 ClaimOutcome.Already
             }
             "not_member" -> ClaimOutcome.Failed("你不在这个会话里，领不了这个红包")
@@ -566,7 +574,7 @@ internal fun CoinGlyph(size: Dp, modifier: Modifier = Modifier) {
 /** 聊天页入口：缓存用 controller.redPackets，私聊 / 群从会话列表判断 */
 @Composable
 internal fun RedPacketOpenSheet(controller: ChatController, meta: RedPacketMeta, onDismiss: () -> Unit) {
-    val source = remember(controller) { RedPacketSource(controller.graph, controller.redPackets) }
+    val source = remember(controller) { RedPacketSource(controller.graph, controller.redPackets, controller::settlePendingRedPacket) }
     val isGroup = controller.graph.conversations.find(controller.conversationId)?.isGroup ?: true
     RedPacketDialog(source, meta, isGroup, controller.myId, initialDetail = false, onDismiss = onDismiss)
 }

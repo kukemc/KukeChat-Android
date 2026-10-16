@@ -64,6 +64,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import androidx.navigation.NavDestination.Companion.hasRoute
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.feature.bots.BotScreen
 import ink.kuke.chat.feature.bots.BotsScreen
@@ -133,7 +134,21 @@ fun MainShell(graph: AppGraph, openConversationId: Long?, onConsumedOpen: () -> 
     val context = LocalContext.current
     val appNav = remember(nav) {
         object : AppNav {
-            override fun go(route: Any) = nav.navigate(route)
+            override fun go(route: Any) {
+                // 跳到某条消息、而这个会话的聊天页就在下面一层（从聊天页进的全局搜索）：弹回去就地跳转，不再叠一个新的聊天页
+                val focus = (route as? ChatRoute)?.focusMessageId
+                if (route is ChatRoute && focus != null) {
+                    val previous = nav.previousBackStackEntry
+                    val sameChat = previous != null && previous.destination.hasRoute(ChatRoute::class) &&
+                        runCatching { previous.toRoute<ChatRoute>().conversationId }.getOrNull() == route.conversationId
+                    if (sameChat) {
+                        ink.kuke.chat.feature.chat.ChatJumps.pending.value = route.conversationId to focus
+                        back()
+                        return
+                    }
+                }
+                nav.navigate(route)
+            }
             override fun back() {
                 BackFx.gesture.value = false
                 nav.popBackStack()

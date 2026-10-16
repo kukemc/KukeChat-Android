@@ -91,6 +91,26 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     val myId: Long? get() = graph.session.session.value?.user?.id
 
+    /**
+     * 「上下文模式」：列表只是历史中的一段（从搜索 / 引用 / 群待办跳过来，目标不在已加载范围里）。
+     * 这时实时推来的新消息和这一段之间有空洞，所以列表只到 contextEdgeId 为止，往下滑逐页补齐，接上最新后退出（同电脑版）。
+     * 这期间不写消息缓存（缓存只放最新的一段，MessageCache 自己照样收实时消息），「回到最新」直接换回最新一页。
+     */
+    val contextEdgeId = mutableStateOf<Long?>(null)
+    val loadingNewer = mutableStateOf(false)
+    val inContext: Boolean get() = contextEdgeId.value != null
+    /** 列表整段换掉（跳转、回到最新）时自增：换之前发出的分页请求回来就作废 */
+    private var generation = 0
+    /** 第一次拉最新一页结束了（成功或失败）：带着目标消息进来的跳转等它 */
+    val initialLoaded = mutableStateOf(false)
+
+    /** 这个会话里我还能领的红包（GET /red-packets/pending），聊天页右上角「N 个红包未领」用。新的在前 */
+    val pendingRedPackets = mutableStateListOf<PendingRedPacket>()
+    /** 旧后端没有这个接口（404 / 422）：不再请求，提示也不显示 */
+    private var pendingSupported = true
+    private var pendingJob: Job? = null
+    private var pendingExpiryJob: Job? = null
+
     init {
         // 先用上次缓存的消息把列表填满：进入会话不空白，网络回来再合并最新的
         messages.addAll(graph.messageCache.get(conversationId))
@@ -98,11 +118,15 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     /** 把当前列表尾部存进缓存（下次进来直接显示） */
     private fun persist() {
-        if (messages.isNotEmpty()) graph.messageCache.put(conversationId, messages.toList())
+        if (messages.isNotEmpty() && !inContext) graph.messageCache.put(conversationId, messages.toList())
     }
 
     fun start() {
-        scope.launch { loadLatest() }
+        scope.launch {
+            loadLatest()
+            initialLoaded.value = true
+        }
+        refreshPendingRedPackets(0)
         listener?.cancel()
         listener = scope.launch {
             graph.realtime.events.collect { event ->
@@ -113,7 +137,9 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                         incoming.senderId?.let { clearTyping(it) }
                         upsert(incoming)
                         persist()
-                        markRead()
+                        // 上下文模式下列表尾巴不是最新的那条：按收到的这条记已读
+                        if (inContext) graph.conversations.markRead(conversationId, incoming.id) else markRead()
+                        if (incoming.type == "red_packet" && incoming.senderId != myId) refreshPendingRedPackets()
                     }
                     "message.recalled" -> decode(data)?.takeIf { it.conversationId == conversationId }?.let { event ->
                         // 撤回事件只带 id / recalled_at，不能整条换掉，否则发送人、内容、metadata 全丢（显示成「用户 0」）
@@ -148,6 +174,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                     "red_packet.updated" -> {
                         if (data["conversation_id"]?.jsonPrimitive?.longOrNull != conversationId) return@collect
                         val id = data["id"]?.jsonPrimitive?.longOrNull ?: return@collect
+                        refreshPendingRedPackets()
                         val current = redPackets[id] ?: return@collect
                         redPackets[id] = current.copy(
                             claimedCount = data["claimed_count"]?.jsonPrimitive?.intOrNull ?: current.claimedCount,
@@ -157,12 +184,21 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                 }
             }
         }
-        scope.launch { graph.realtime.reconnected.collect { loadLatest() } }
+        scope.launch {
+            graph.realtime.reconnected.collect {
+                loadLatest()
+                refreshPendingRedPackets(0)
+            }
+        }
     }
 
     private suspend fun loadLatest() {
+        // 上下文模式下不往这一段里并最新一页（中间有空洞），等往下滑补齐或点「回到最新」
+        if (inContext) return
+        val gen = generation
         runCatching { fetch(null) }
             .onSuccess { page ->
+                if (gen != generation || inContext) return@onSuccess
                 // 缓存和最新一页之间如果隔了很多条（离开得久），接起来会有断档：这时丢掉旧缓存，只用最新一页
                 val newestKnown = messages.lastOrNull()?.id
                 if (newestKnown != null && page.size >= PAGE && page.first().id > newestKnown) messages.clear()
@@ -183,15 +219,96 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         if (loadingOlder.value || reachedStart.value) return
         val oldest = messages.firstOrNull()?.id ?: return
         loadingOlder.value = true
+        val gen = generation
         scope.launch {
             runCatching { fetch(oldest) }
                 .onSuccess { page ->
+                    if (gen != generation) return@onSuccess
                     messages.addAll(0, page.filter { incoming -> messages.none { it.id == incoming.id } })
                     if (page.size < PAGE) reachedStart.value = true
                 }
                 .onFailure { error.value = it.userMessage() }
             loadingOlder.value = false
         }
+    }
+
+    // ------------------------------------------------------------ 跳转、上下文模式（同电脑版 MessageList 的 jumpToMessage）
+
+    /**
+     * 让目标消息出现在列表里：已经加载了就什么都不做；没加载就拉它前后各 25 条
+     * （GET /conversations/{id}/messages/{mid}/context?before=25&after=25），把列表换成这一段、进入上下文模式。
+     * 返回 null = 目标已在列表里（界面接着居中 + 高亮）；否则返回给人看的失败原因（空串 = 被后一次跳转顶掉了，不用提示）。
+     */
+    suspend fun jumpTo(messageId: Long): String? {
+        if (messages.any { it.id == messageId }) return null
+        val gen = ++generation
+        val list = try {
+            parseMessagesLoose(graph.api.get("/conversations/$conversationId/messages/$messageId/context?before=$CONTEXT_SIDE&after=$CONTEXT_SIDE"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return "已找到该消息，但无法加载它所在的上下文窗口。"
+        }
+        if (gen != generation) return ""  // 又跳去别处了：不提示
+        if (list.none { it.id == messageId }) return "已找到该消息，但该消息对当前账号不可见或已被清除。"
+        val page = list.distinctBy { it.id }.sortedBy { it.id }
+        val before = page.count { it.id < messageId }
+        val after = page.count { it.id > messageId }
+        messages.clear()
+        messages.addAll(page)
+        loadingOlder.value = false
+        reachedStart.value = before < CONTEXT_SIDE
+        if (after < CONTEXT_SIDE) {
+            // 这一段已经接到最新：顺手把缓存里比它还新的（拉的途中实时到的）接上，不进上下文模式
+            contextEdgeId.value = null
+            graph.messageCache.get(conversationId).filter { it.id > page.last().id }.forEach(::insert)
+            persist()
+            markRead()
+        } else {
+            contextEdgeId.value = page.last().id
+        }
+        return null
+    }
+
+    /** 上下文模式里往下滑到底：从边界往后再拉一页；不足一页说明接上了最新，退出上下文模式 */
+    fun loadNewerContext() {
+        val edge = contextEdgeId.value ?: return
+        if (loadingNewer.value) return
+        loadingNewer.value = true
+        val gen = generation
+        scope.launch {
+            runCatching { parseMessagesLoose(graph.api.get("/conversations/$conversationId/messages/$edge/context?before=0&after=$PAGE")) }
+                .onSuccess { list ->
+                    if (gen != generation || contextEdgeId.value != edge) return@onSuccess
+                    val newer = list.filter { it.id > edge }.distinctBy { it.id }.sortedBy { it.id }
+                    newer.forEach(::insert)
+                    if (newer.size < PAGE) {
+                        contextEdgeId.value = null
+                        // 拉的途中实时到的那几条在缓存里（这期间列表没收），接上
+                        val last = messages.lastOrNull()?.id ?: 0L
+                        graph.messageCache.get(conversationId).filter { it.id > last }.forEach(::insert)
+                        persist()
+                        markRead()
+                    } else {
+                        contextEdgeId.value = newer.last().id
+                    }
+                }
+                .onFailure { if (gen == generation) error.value = "加载更新消息失败，请稍后重试。" }
+            loadingNewer.value = false
+        }
+    }
+
+    /** 「回到最新」：上下文模式下直接换回最新一页（先用缓存里的最新一段顶上，网络回来再合并） */
+    fun resetToLatest() {
+        if (!inContext) return
+        generation++
+        contextEdgeId.value = null
+        loadingNewer.value = false
+        loadingOlder.value = false
+        reachedStart.value = false
+        messages.clear()
+        messages.addAll(graph.messageCache.get(conversationId))
+        scope.launch { loadLatest() }
     }
 
     private suspend fun fetch(beforeId: Long?): List<Message> {
@@ -439,10 +556,56 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         }
     }
 
+    /**
+     * 重拉「我还能领的红包」：GET /red-packets/pending?conversation_id=…。连续触发（一波领取事件）合并成一次。
+     * 旧后端没有这个接口（404 / 422）就静默关掉；别的失败保留现状，下次触发再试。
+     */
+    fun refreshPendingRedPackets(delayMs: Long = 400) {
+        if (!pendingSupported) return
+        pendingJob?.cancel()
+        pendingJob = scope.launch {
+            if (delayMs > 0) delay(delayMs)
+            try {
+                val items = graph.api.get("/red-packets/pending?conversation_id=$conversationId").asObj()?.a("items").orEmpty()
+                    .mapNotNull { it.asObj()?.let(::parsePendingRedPacket) }
+                pendingRedPackets.clear()
+                pendingRedPackets.addAll(items)
+                schedulePendingExpiry()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: ink.kuke.chat.core.net.ApiException) {
+                if (e.status == 404 || e.status == 422) {
+                    pendingSupported = false
+                    pendingRedPackets.clear()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** 自己领过 / 确认领不了的红包：先在本地摘掉（提示立刻消失），再重拉一次以服务端为准 */
+    fun settlePendingRedPacket(id: Long) {
+        pendingRedPackets.removeAll { it.id == id }
+        refreshPendingRedPackets()
+    }
+
+    /** 按 expires_at 本地去掉过期的：睡到最近的那个过期时间再摘 */
+    private fun schedulePendingExpiry() {
+        pendingExpiryJob?.cancel()
+        val now = java.time.Instant.now()
+        pendingRedPackets.removeAll { it.expiresAt?.let { at -> !at.isAfter(now) } == true }
+        val next = pendingRedPackets.mapNotNull { it.expiresAt }.minOrNull() ?: return
+        pendingExpiryJob = scope.launch {
+            delay(java.time.Duration.between(java.time.Instant.now(), next).toMillis().coerceAtLeast(0) + 500)
+            schedulePendingExpiry()
+        }
+    }
+
     /** 领红包。成功返回领到的金额；失败把服务端的话放进 error 返回 null */
     suspend fun claimRedPacket(id: Long): Int? = try {
         val result = graph.api.post("/red-packets/$id/claim").asObj()
         result?.o("red_packet")?.let(::parseRedPacket)?.let { redPackets[id] = it }
+        settlePendingRedPacket(id)
         result?.i("amount")
     } catch (e: Exception) {
         // 已经领过 / 被抢完 / 过期：把最新状态拉下来，卡片跟着变
@@ -547,7 +710,14 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     internal fun decode(element: JsonElement): Message? = runCatching { KcJson.decodeFromJsonElement(Message.serializer(), element) }.getOrNull()
 
+    /** 进列表。上下文模式下比边界新的不收（和这一段之间可能有空洞），已有的照常更新 */
     private fun upsert(message: Message) {
+        val edge = contextEdgeId.value
+        if (edge != null && message.id > edge && messages.none { it.id == message.id }) return
+        insert(message)
+    }
+
+    private fun insert(message: Message) {
         val index = messages.indexOfFirst { it.id == message.id }
         when {
             index >= 0 -> messages[index] = message
@@ -586,6 +756,8 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     companion object {
         const val PAGE = 50
+        /** 跳转时目标前后各拉几条（同电脑版 getMessageContext before / after） */
+        const val CONTEXT_SIDE = 25
         private const val MAX_IMAGE_BYTES = 3 * 1024 * 1024
         private const val MAX_EDGE = 2560
     }
