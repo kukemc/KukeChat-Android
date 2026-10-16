@@ -362,13 +362,25 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
     if (message.type == "image") {
         val url = Meta.imageUrl(message.content)
         val sticker = Meta.isSticker(message)
+        // 表情按自身比例放进 120dp 的框里：原图常常只有几十像素，按像素原样画在高密度屏上就只剩一点点
+        var stickerAspect by remember(url) { mutableStateOf(1f) }
         AsyncImage(
             model = url,
             contentDescription = if (sticker) "表情" else "图片",
             contentScale = ContentScale.Fit,
+            onSuccess = { state ->
+                val drawable = state.result.drawable
+                if (drawable.intrinsicWidth > 0 && drawable.intrinsicHeight > 0) {
+                    stickerAspect = (drawable.intrinsicWidth.toFloat() / drawable.intrinsicHeight).coerceIn(0.5f, 2f)
+                }
+            },
             modifier = Modifier
-                .heightIn(max = if (sticker) 140.dp else 260.dp)
-                .widthIn(max = if (sticker) 140.dp else 220.dp)
+                .then(
+                    if (sticker) {
+                        if (stickerAspect >= 1f) Modifier.size(STICKER_SIZE, STICKER_SIZE / stickerAspect)
+                        else Modifier.size(STICKER_SIZE * stickerAspect, STICKER_SIZE)
+                    } else Modifier.heightIn(max = 260.dp).widthIn(max = 220.dp),
+                )
                 .clip(RoundedCornerShape(if (sticker) 6.dp else 12.dp))
                 .combinedClickable(
                     onClick = { url?.let(callbacks.onOpenImage) },
@@ -655,3 +667,6 @@ private fun Reactions(message: Message, mine: Boolean, callbacks: MessageCallbac
         }
     }
 }
+
+/** 聊天里表情的显示边长（长边） */
+private val STICKER_SIZE = 120.dp

@@ -40,6 +40,23 @@ android {
         manifestPlaceholders["invitePathPattern"] = inviteUri?.path.orEmpty().trimEnd('/').let { if (it.isEmpty()) ".*" else "$it.*" }
     }
 
+    // 正式版签名：密钥放在私有仓库 ../KukeChat/ops/android-release/（不进 git，丢了就无法再给已装用户覆盖升级）。
+    // 也可以用 -Pkukechat.signing=<keystore.properties 的路径> 指定别处；找不到时正式包不签名（打不出可安装的包）
+    val signingProps = ((findProperty("kukechat.signing") as String?)?.let { file(it) } ?: rootProject.file("../KukeChat/ops/android-release/keystore.properties"))
+        .takeIf { it.isFile }
+        ?.let { f -> Properties().apply { f.inputStream().use { stream -> load(stream) } } to f.parentFile }
+    signingConfigs {
+        if (signingProps != null) {
+            create("release") {
+                val (props, dir) = signingProps
+                storeFile = File(dir, props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // 开发版和现有 App 能同时装在一台手机上
@@ -47,8 +64,10 @@ android {
             versionNameSuffix = "-dev"
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+            // 先不混淆：R8 混淆后 kotlinx.serialization / 反射相关代码要专门配规则并在真机上验证，2.0.0 先求稳
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -94,6 +113,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    implementation(libs.coil.gif)
     // 底栏毛玻璃：取背后的页面内容做模糊（Android 12+ 真模糊，更早的系统退回半透明底色）
     implementation(libs.haze)
     testImplementation(libs.junit)
