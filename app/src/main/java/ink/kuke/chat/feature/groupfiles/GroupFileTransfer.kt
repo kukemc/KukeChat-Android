@@ -15,6 +15,7 @@ import ink.kuke.chat.core.net.ClientProof
 import ink.kuke.chat.core.net.Endpoints
 import ink.kuke.chat.core.net.KcJson
 import ink.kuke.chat.core.net.await
+import ink.kuke.chat.feature.groupplus.GroupFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -82,8 +83,9 @@ private class StreamingFileBody(
 }
 
 /**
- * 上传群文件（POST /conversations/{cid}/files，multipart：file / announce / permanent）。
+ * 上传群文件（POST /conversations/{cid}/files，multipart：file / announce / permanent / folder_id）。
  * 走 Api.upload，所以令牌、客户端证明头、错误解析（ApiException）都和别的接口一致。
+ * 返回服务端记下的文件（解析不了为 null）：变成临时文件时会忽略 folder_id 放根目录，以返回的 folder_id 为准。
  */
 suspend fun uploadGroupFile(
     graph: AppGraph,
@@ -92,14 +94,16 @@ suspend fun uploadGroupFile(
     picked: PickedFile,
     announce: Boolean,
     permanent: Boolean,
+    folderId: Long? = null,
     onProgress: (Long) -> Unit,
-) {
-    val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+): GroupFile? {
+    val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("file", picked.name, StreamingFileBody(context, picked.uri, picked.mime, picked.size, onProgress))
         .addFormDataPart("announce", announce.toString())
         .addFormDataPart("permanent", permanent.toString())
-        .build()
-    graph.api.upload("/conversations/$conversationId/files", body)
+    if (folderId != null) builder.addFormDataPart("folder_id", folderId.toString())
+    val result = graph.api.upload("/conversations/$conversationId/files", builder.build())
+    return ((result as? JsonObject)?.get("file"))?.let { runCatching { KcJson.decodeFromJsonElement(GroupFile.serializer(), it) }.getOrNull() }
 }
 
 /** 文件名清洗成本地能用的名字 */

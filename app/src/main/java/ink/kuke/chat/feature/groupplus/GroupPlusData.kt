@@ -14,8 +14,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
@@ -144,6 +146,8 @@ data class FileQuota(
     @SerialName("free_bytes") val freeBytes: Long = 0,
     /** 这一档临时文件的单个上限；未解锁为 null */
     @SerialName("temp_max_bytes") val tempMaxBytes: Long? = null,
+    /** 档位能不能用文件夹（有效档位 Pro+ / MAX）。旧服务端没有这个字段 */
+    @SerialName("folders_enabled") val foldersEnabled: Boolean = false,
 )
 
 @Serializable
@@ -221,9 +225,38 @@ data class GroupFile(
     val expired: Boolean = false,
     @SerialName("message_id") val messageId: Long? = null,
     @SerialName("download_path") val downloadPath: String? = null,
+    /** 24 小时临时文件（空间放不下时传的，不占配额，不能放进文件夹） */
+    val temporary: Boolean = false,
+    /** 所在的文件夹，根目录为 null（旧服务端没有） */
+    @SerialName("folder_id") val folderId: Long? = null,
+    @SerialName("folder_name") val folderName: String? = null,
 )
 
-class FilesPage(val items: List<GroupFile>, val total: Int, val quota: FileQuota)
+/** 群文件夹（Pro+ / MAX，一层）：file_count / total_size 只算没过期的文件 */
+@Serializable
+data class GroupFileFolder(
+    val id: Long,
+    val name: String = "",
+    @SerialName("file_count") val fileCount: Int = 0,
+    @SerialName("total_size") val totalSize: Long = 0,
+    @SerialName("created_at") val createdAt: String = "",
+)
+
+/**
+ * 群文件列表的一页。folders 每次都是这个群的全部文件夹；folder 是现在看的文件夹（根目录 / 搜索为 null）。
+ * 旧服务端没有文件夹字段：folders 为空、两个权限为 false，界面保持原样。
+ */
+class FilesPage(
+    val items: List<GroupFile>,
+    val total: Int,
+    val quota: FileQuota,
+    val folders: List<GroupFileFolder> = emptyList(),
+    val folder: GroupFileFolder? = null,
+    val search: Boolean = false,
+    val canManageFolders: Boolean = false,
+    val canTidyFolders: Boolean = false,
+    val folderLimit: Int = 50,
+)
 
 /** 精华列表的一项（FeaturedMessageRead）：message 是快照构造的消息 */
 class FeaturedItem(
@@ -247,6 +280,7 @@ val Throwable.apiCode: String? get() = (this as? ApiException)?.code
 private fun JsonElement?.obj(): JsonObject? = this as? JsonObject
 private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 
 /** 错误 detail 里的数字字段（余额不足带 balance / total / shortfall） */
 fun ApiException.detailLong(key: String): Long? = detail.obj()?.long(key)
@@ -298,15 +332,60 @@ class GroupPlusApi(private val graph: AppGraph) {
 
     // ---- 群文件
 
-    suspend fun files(cid: Long, q: String = "", limit: Int = 30, offset: Int = 0): FilesPage {
+    /** folderId 为 null 是根目录；带了 q 就是跨文件夹搜索（folderId 被服务端忽略） */
+    suspend fun files(cid: Long, q: String = "", limit: Int = 30, offset: Int = 0, folderId: Long? = null): FilesPage {
         val query = buildString {
             append("limit=$limit&offset=$offset")
             if (q.isNotBlank()) append("&q=").append(URLEncoder.encode(q.trim(), "UTF-8"))
+            else if (folderId != null) append("&folder_id=").append(folderId)
         }
         val obj = api.get("/conversations/$cid/files?$query").obj()
         val items = (obj?.get("items") as? JsonArray).orEmpty().mapNotNull { runCatching { KcJson.decodeFromJsonElement(GroupFile.serializer(), it) }.getOrNull() }
         val quota = obj?.get("quota")?.let { runCatching { KcJson.decodeFromJsonElement(FileQuota.serializer(), it) }.getOrNull() } ?: FileQuota()
-        return FilesPage(items, (obj?.long("total") ?: items.size.toLong()).toInt(), quota)
+        val folders = (obj?.get("folders") as? JsonArray).orEmpty().mapNotNull { runCatching { KcJson.decodeFromJsonElement(GroupFileFolder.serializer(), it) }.getOrNull() }
+        val folder = obj?.get("folder").obj()?.let { runCatching { KcJson.decodeFromJsonElement(GroupFileFolder.serializer(), it) }.getOrNull() }
+        return FilesPage(
+            items = items,
+            total = (obj?.long("total") ?: items.size.toLong()).toInt(),
+            quota = quota,
+            folders = folders,
+            folder = folder,
+            search = obj?.bool("search") ?: false,
+            canManageFolders = obj?.bool("can_manage_folders") ?: false,
+            canTidyFolders = obj?.bool("can_tidy_folders") ?: false,
+            folderLimit = obj?.long("folder_limit")?.toInt() ?: 50,
+        )
+    }
+
+    /**
+     * 聊天里文件卡片要的最新状态（转永久 / 转限时）：根目录只列根目录的文件，放进文件夹的要再按文件夹拉。
+     * 只拉有文件的文件夹，最多 20 个；单个文件夹失败就跳过。
+     */
+    suspend fun filesForCards(cid: Long): List<GroupFile> {
+        val root = files(cid, limit = 100)
+        val inFolders = root.folders.filter { it.fileCount > 0 }.take(20).flatMap { folder ->
+            runCatching { files(cid, limit = 100, folderId = folder.id).items }.getOrDefault(emptyList())
+        }
+        return root.items + inFolders
+    }
+
+    suspend fun createFolder(cid: Long, name: String): GroupFileFolder =
+        KcJson.decodeFromJsonElement(GroupFileFolder.serializer(), api.post("/conversations/$cid/files/folders", buildJsonObject { put("name", name) }))
+
+    suspend fun renameFolder(cid: Long, folderId: Long, name: String): GroupFileFolder =
+        KcJson.decodeFromJsonElement(GroupFileFolder.serializer(), api.patch("/conversations/$cid/files/folders/$folderId", buildJsonObject { put("name", name) }))
+
+    /** 删文件夹，里面的文件移回根目录；返回移回去的文件数 */
+    suspend fun deleteFolder(cid: Long, folderId: Long): Int =
+        api.delete("/conversations/$cid/files/folders/$folderId").obj()?.long("moved_to_root")?.toInt() ?: 0
+
+    /** 批量移动（全部成功或一个都不动）；folderId 为 null = 移回根目录。返回移动的个数 */
+    suspend fun moveFiles(cid: Long, fileIds: List<Long>, folderId: Long?): Int {
+        val body = buildJsonObject {
+            put("file_ids", JsonArray(fileIds.map { JsonPrimitive(it) }))
+            if (folderId == null) put("folder_id", JsonNull) else put("folder_id", folderId)
+        }
+        return api.post("/conversations/$cid/files/move", body).obj()?.long("moved")?.toInt() ?: fileIds.size
     }
 
     suspend fun setPermanent(cid: Long, fileId: Long, permanent: Boolean): GroupFile =

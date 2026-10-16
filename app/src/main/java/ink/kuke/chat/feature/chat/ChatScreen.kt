@@ -656,8 +656,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         }
         LaunchedEffect(conversationId, hasFileMessages, fileTick) {
             if (hasFileMessages) {
-                runCatching { ink.kuke.chat.feature.groupplus.GroupPlusApi(graph).files(conversationId, limit = 100) }
-                    .onSuccess { ink.kuke.chat.feature.chat.LiveFiles.apply(it.items) }
+                runCatching { ink.kuke.chat.feature.groupplus.GroupPlusApi(graph).filesForCards(conversationId) }
+                    .onSuccess { ink.kuke.chat.feature.chat.LiveFiles.apply(it) }
             }
         }
         openFile?.let { message ->
