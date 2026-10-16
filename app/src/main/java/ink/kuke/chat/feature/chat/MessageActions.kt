@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -81,12 +83,9 @@ fun actionsFor(message: Message, mine: Boolean, staff: Boolean): List<MessageAct
     if (message.type == "image") add(MessageAction("sticker", "添加到表情", KcIcons.imagePlus))
 }
 
-/** 「+」展开的更多回应（设计稿：电脑版 ReactionPicker 的精简版） */
-private val MoreReactions = listOf("👍", "❤️", "🎉", "😂", "😮", "😢", "🙏", "👏", "🔥", "😍", "🤣", "👀", "💯", "😎", "🥳", "😅", "🤝", "💪")
-
 /**
  * 长按消息（设计稿 P04）：下层内容由外层模糊 + 压暗，被按住的消息以原样（头像 + 昵称 + 气泡）抬起居中，
- * 上方是快捷回应胶囊（末尾「+」展开更多），下方是 5 列操作宫格。他人消息靠左缩进 44dp（让开头像），自己的靠右。
+ * 上方是快捷回应胶囊（末尾「+」展开分类表情面板，见 ReactionPicker.kt），下方是 5 列操作宫格。他人消息靠左缩进 44dp（让开头像），自己的靠右。
  * 点空白处 / 系统返回关闭。
  */
 @Composable
@@ -107,7 +106,7 @@ fun MessageActionsLayer(
     BackHandler(onBack = onDismiss)
     val noop = remember { MessageCallbacks({}, {}, {}, { _, _ -> }, {}, {}) }
     val side = if (mine) Alignment.End else Alignment.Start
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .graphicsLayer { alpha = appear.value }
@@ -118,6 +117,7 @@ fun MessageActionsLayer(
             .imePadding(),
         contentAlignment = Alignment.Center,
     ) {
+        val panelMax = (maxHeight * 0.58f).coerceAtMost(400.dp)
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp)
                 .graphicsLayer { val sc = 0.94f + 0.06f * appear.value; scaleX = sc; scaleY = sc }
@@ -125,42 +125,24 @@ fun MessageActionsLayer(
             horizontalAlignment = side,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // 快捷回应胶囊：40dp 圆格、26sp 表情，末尾灰底「+」
-            val shape = RoundedCornerShape(if (expanded) 22.dp else 99.dp)
-            Column(
-                Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
-                    .shadow(8.dp, shape).background(colors.raised, shape).padding(5.dp),
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    QuickReactions.forEach { emoji ->
-                        Box(Modifier.size(40.dp).clip(CircleShape).clickable { onReaction(emoji) }, contentAlignment = Alignment.Center) {
-                            Text(emoji, fontSize = 26.sp)
-                        }
-                    }
-                    Box(
-                        Modifier.size(40.dp).clip(CircleShape).background(colors.text.copy(alpha = 0.06f)).clickable { expanded = !expanded },
-                        contentAlignment = Alignment.Center,
-                    ) { KcIcon(if (expanded) KcIcons.close else KcIcons.plus, tint = colors.muted, size = 18.dp, contentDescription = "更多回应") }
-                }
-                if (expanded) {
-                    MoreReactions.chunked(6).forEach { rowItems ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            rowItems.forEach { emoji ->
-                                Box(Modifier.size(40.dp).clip(CircleShape).clickable { onReaction(emoji) }, contentAlignment = Alignment.Center) {
-                                    Text(emoji, fontSize = 24.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // 表情回应：收起是一行快捷表情 +「+」，展开是可滑动的分类面板（ReactionPicker.kt）。
+            // 展开时把操作宫格收起来、抬起的消息压矮，面板最高占可用高度的一半多一点，菜单不会被挤出屏幕
+            ReactionPicker(
+                message = message,
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                maxPanelHeight = panelMax,
+                onPick = onReaction,
+                modifier = Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
+                    .then(if (expanded) Modifier.widthIn(max = 400.dp) else Modifier),
+            )
             // 抬起的消息：原样渲染一条（回调全空，不会再次触发长按）
-            Box(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+            Box(Modifier.fillMaxWidth().heightIn(max = if (expanded) 160.dp else 280.dp).clipToBounds()) {
                 MessageRow(message = message, mine = mine, isGroup = isGroup, showName = isGroup, callbacks = noop)
             }
-            // 操作宫格 5 × N
+            // 操作宫格 5 × N（展开表情面板时收起）
             val actions = actionsFor(message, mine, staff)
-            Column(
+            if (!expanded) Column(
                 Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
                     .widthIn(max = 320.dp).fillMaxWidth()
                     .shadow(8.dp, RoundedCornerShape(18.dp)).background(colors.raised, RoundedCornerShape(18.dp)).padding(10.dp),
