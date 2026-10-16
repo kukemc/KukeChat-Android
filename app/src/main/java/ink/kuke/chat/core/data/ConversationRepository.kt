@@ -52,6 +52,8 @@ class ConversationRepository(
                 when {
                     event.type == "message.created" -> runCatching { KcJson.decodeFromJsonElement(Message.serializer(), event.data) }.getOrNull()?.let(::applyMessage)
                     event.type == "conversation.read" -> applyRead(event.data)
+                    // 红包结束了（抢完 / 过期 / 撤回）：「[有红包]」可能该摘掉了，以服务端为准重拉
+                    event.type == "red_packet.updated" && event.data["status"]?.jsonPrimitive?.content.let { it != null && it != "active" } -> refreshSoon()
                     event.type == "message.recalled" || event.type.startsWith("conversation.") || event.type.startsWith("group.") ||
                         event.type.startsWith("friend") -> refreshSoon()
                 }
@@ -107,12 +109,29 @@ class ConversationRepository(
         }
         val mine = message.senderId != null && message.senderId == currentUserId()
         val countsAsUnread = !mine && message.type != "system" && visibleConversationId != message.conversationId
+        val packetPending = message.type == "red_packet" && redPacketClaimable(message, existing, mine)
         _items.update { list ->
             sort(list.map {
                 if (it.id != message.conversationId) it
-                else it.copy(lastMessage = message, updatedAt = message.createdAt, unreadCount = it.unreadCount + if (countsAsUnread) 1 else 0)
+                else it.copy(
+                    lastMessage = message,
+                    updatedAt = message.createdAt,
+                    unreadCount = it.unreadCount + if (countsAsUnread) 1 else 0,
+                    redPacketPending = it.redPacketPending || packetPending,
+                )
             })
         }
+    }
+
+    /**
+     * 新来的红包消息算不算「我还能领」（会话列表的「[有红包]」，docs/red-packets.md 第 6 节）：
+     * 私聊里自己发的不算；专属红包只对目标本人算。清掉靠领取后 / 红包结束后的整份重拉。
+     */
+    private fun redPacketClaimable(message: Message, conversation: Conversation, mine: Boolean): Boolean {
+        if (mine && !conversation.isGroup) return false
+        val packet = message.metadata?.get("red_packet") as? JsonObject ?: return false
+        val target = (packet["target_user_id"] as? kotlinx.serialization.json.JsonPrimitive)?.longOrNull
+        return target == null || target == currentUserId()
     }
 
     private fun applyRead(data: JsonObject) {

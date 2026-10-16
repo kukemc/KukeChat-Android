@@ -13,7 +13,17 @@ fun messagePreview(message: Message): String {
         "image" -> if (meta?.get("sticker")?.jsonPrimitive?.booleanOrNull == true || message.content.contains("/stickers/")) "[表情]" else "[图片]"
         "voice" -> "[语音]"
         "poll" -> "[投票]"
-        "red_packet" -> "[红包]"
+        "red_packet" -> {
+            val packet = meta?.get("red_packet") as? JsonObject
+            val chain = (packet?.get("chain_text") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.isNotBlank() == true
+            val exclusive = (packet?.get("target_user_id") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() != null
+            when {
+                exclusive && chain -> "[专属接龙红包]"
+                exclusive -> "[专属红包]"
+                chain -> "[接龙红包]"
+                else -> "[红包]"
+            }
+        }
         "gift" -> message.content.ifBlank { "[礼物]" }
         "forward_bundle" -> "[聊天记录]"
         else -> when {

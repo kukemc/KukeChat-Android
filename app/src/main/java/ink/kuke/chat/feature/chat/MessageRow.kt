@@ -100,6 +100,8 @@ class MessageCallbacks(
     val onOpenRedPacket: (Message, RedPacketMeta) -> Unit = { _, _ -> },
     val redPacketState: (Long) -> RedPacketState? = { null },
     val loadRedPacket: (Long) -> Unit = {},
+    /** 当前登录用户：专属红包要知道是不是给我的 */
+    val myId: Long? = null,
     val onOpenBundle: (Message) -> Unit = {},
     val onOpenShare: (Message) -> Unit = {},
     /** 群文件消息卡片（metadata.file）：点开下载面板 */
@@ -455,6 +457,8 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
     val pill = isVoice && quote == null
     val shape = if (pill) RoundedCornerShape(22.dp) else bubbleShape
     val voicePress = rememberInteraction()
+    // 气泡下面挂外站链接卡片（CCW 作品、B 站视频）
+    Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
     Column(
         Modifier
             .then(if (isVoice) Modifier.pressScale(voicePress, 0.97f) else Modifier)
@@ -478,6 +482,20 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
                 }
             }
         }
+        // 接龙红包领取时自动发出的那句：前面挂一个「红包接龙」小标记，点它打开那个红包
+        redPacketChainOf(message)?.let { packetId ->
+            Row(
+                Modifier
+                    .padding(bottom = 4.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { callbacks.onOpenRedPacket(message, RedPacketMeta(packetId, "normal", "恭喜发财，大吉大利", 1)) }
+                    .padding(vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KcIcon(KcIcons.redPacket, tint = content.copy(alpha = 0.62f), size = 12.dp)
+                Text("红包接龙", style = type.caption, color = content.copy(alpha = 0.62f), modifier = Modifier.padding(start = 4.dp))
+            }
+        }
         when (message.type) {
             "voice" -> VoiceContent(message, mine, inset = if (pill) 20.dp else 24.dp)
             else -> {
@@ -491,6 +509,8 @@ internal fun MessageBody(message: Message, mine: Boolean, callbacks: MessageCall
                 }
             }
         }
+    }
+    if (!isVoice && message.content.isNotBlank()) LinkPreviewCards(message)
     }
 }
 

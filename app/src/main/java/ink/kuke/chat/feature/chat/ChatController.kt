@@ -323,7 +323,11 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     // ------------------------------------------------------------ 发送
 
+    /** 每次设置引用都自增（同一条再引用一次也算）：输入框据此聚焦、弹键盘 */
+    val quoteRequests = androidx.compose.runtime.mutableIntStateOf(0)
+
     fun quoteMessage(message: Message) {
+        quoteRequests.intValue++
         quote.value = QuoteDraft(message.id, message.senderId, message.senderName, messagePreview(message).take(80), message.type, message.content.take(200), message.createdAt)
     }
 

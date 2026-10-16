@@ -160,6 +160,8 @@ internal class RedPacketSource(
     val cache: SnapshotStateMap<Long, RedPacketState>,
     /** 领到了 / 确认领不了（抢完、过期、撤回、领过）：聊天页用它摘掉「N 个红包未领」里的这一个 */
     private val onSettled: (Long) -> Unit = {},
+    /** 接龙红包领到时，服务端以我的身份发出的那条消息（MessageRead）：聊天页直接落进列表（同 id 的 message.created 会去重） */
+    private val onMessage: (kotlinx.serialization.json.JsonElement?) -> Unit = {},
 ) {
     /** 拉最新状态；失败返回给人看的原因 */
     suspend fun load(id: Long): String? = try {
@@ -175,6 +177,7 @@ internal class RedPacketSource(
     suspend fun claim(id: Long): ClaimOutcome = try {
         val result = graph.api.post("/red-packets/$id/claim").asObj()
         result?.o("red_packet")?.let(::parseRedPacket)?.let { cache[id] = it }
+        result?.get("message")?.takeIf { it is JsonObject }?.let(onMessage)
         graph.conversations.refreshSoon()
         onSettled(id)
         ClaimOutcome.Claimed(result?.i("amount") ?: 0)
@@ -196,6 +199,14 @@ internal class RedPacketSource(
             "not_member" -> ClaimOutcome.Failed("你不在这个会话里，领不了这个红包")
             "not_found" -> ClaimOutcome.Failed("这个红包不存在了")
             "muted" -> ClaimOutcome.Failed("你的账号正在禁言中，不能领红包")
+            "not_target" -> {
+                load(id)
+                onSettled(id)
+                val name = cache[id]?.targetName
+                ClaimOutcome.Failed(if (name != null) "这是给 $name 的专属红包，只有 Ta 能领" else "这是给别人的专属红包，你领不了")
+            }
+            "muted_in_group" -> ClaimOutcome.Failed("你在这个群里被禁言了。接龙红包领了要替你发一句话，所以暂时领不了")
+            "chain_send_failed" -> ClaimOutcome.Failed("接龙的那句话没发出去，这次没有领到，稍后再试")
             else -> ClaimOutcome.Failed(e.userMessage())
         }
     } catch (e: Exception) {
@@ -206,7 +217,8 @@ internal class RedPacketSource(
 // ------------------------------------------------------------------ 发红包
 
 private data class RpLimits(val maxTotal: Int, val maxCount: Int, val minEach: Int, val dailyLimit: Int, val expireHours: Int)
-private data class RpConfig(val enabled: Boolean, val limits: RpLimits, val sentToday: Int)
+/** [features]：服务端支持的玩法（chain 接龙、exclusive 专属）；旧服务端没有这个字段，当成空 */
+private data class RpConfig(val enabled: Boolean, val limits: RpLimits, val sentToday: Int, val features: Set<String> = emptySet())
 private data class RpBalance(val bound: Boolean, val balance: Int, val stale: Boolean)
 private data class RpProblem(val field: String, val text: String)
 
@@ -219,6 +231,7 @@ private fun parseConfig(obj: JsonObject?): RpConfig {
         enabled = obj?.b("enabled") == true,
         limits = RpLimits(positive("max_total", 500), positive("max_count", 100), positive("min_each", 1), positive("daily_send_limit", 20), positive("expire_hours", 24)),
         sentToday = (obj?.i("sent_today") ?: 0).coerceAtLeast(0),
+        features = obj?.a("features")?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }.orEmpty().toSet(),
     )
 }
 
@@ -250,9 +263,17 @@ private fun sendFailure(e: Throwable): String {
         "muted" -> if (detail?.s("muted_until") != null) "你正在禁言中，不能发红包" else "你在这个群里被禁言了（或群开了全员禁言），不能在这里发红包"
         "ccw_not_bound" -> "还没有绑定 CCW 账号，绑定后才能发红包"
         "invalid_amount" -> "金额不对：要是正整数，并且在上限以内"
-        "invalid_count" -> "个数不对：要是正整数，并且在上限以内"
-        "invalid_kind" -> "这里不能发这种红包（私聊只能发普通红包）"
+        "invalid_count" -> "个数不对：要是正整数，并且在上限以内（专属红包只能 1 个）"
+        "invalid_kind" -> "这里不能发这种红包（私聊和专属红包只能是普通红包）"
         "greeting_rejected" -> api.message.ifBlank { "祝福语没有通过审核，换一句试试" }
+        "chain_text_rejected" -> api.message.ifBlank { "接龙口令没有通过审核，换一句试试" }
+        "invalid_target" -> when (detail?.s("reason")) {
+            "direct" -> "私聊里不能发专属红包"
+            "self" -> "专属红包不能发给自己"
+            "not_member" -> "Ta 已经不在这个群里了，换一位试试"
+            "bot" -> "专属红包不能发给机器人"
+            else -> "专属红包要指定一位群成员"
+        }
         "rate_limited" -> "发得太快了，这次没有扣币，稍等一会儿再发"
         "insufficient_balance" -> detail?.i("shortfall")?.takeIf { it > 0 }?.let { "金币不够，还差 ${coins(it)} 个" } ?: "金币不够"
         "daily_limit" -> "今天发红包的次数用完了，明天再来"
@@ -276,7 +297,8 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
     var balance by remember { mutableStateOf<RpBalance?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
-    var kind by remember { mutableStateOf(if (isGroup) "lucky" else "normal") }
+    var kindChoice by remember { mutableStateOf(if (isGroup) "lucky" else "normal") }
+    val kind = kindChoice
     var amountText by remember { mutableStateOf("") }
     var countText by remember { mutableStateOf("") }
     var greeting by remember { mutableStateOf("") }
@@ -285,6 +307,11 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
     // 服务端说禁言 / 今天发满了：之后都按发不了算
     var serverMuted by remember { mutableStateOf<String?>(null) }
     var serverDaily by remember { mutableStateOf(false) }
+    // 接龙：领的人会自动以自己的身份发出口令；专属：只有选中的那位群成员能领（只在群里、服务端支持时出现）
+    var chainOn by remember { mutableStateOf(false) }
+    var chainText by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf<MemberLite?>(null) }
+    var picking by remember { mutableStateOf(false) }
 
     LaunchedEffect(attempt) {
         loadError = null
@@ -326,10 +353,18 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
             cfg == null -> StateText("加载中…")
             else -> {
                 val limits = cfg.limits
+                val canChain = isGroup && "chain" in cfg.features
+                val canExclusive = isGroup && "exclusive" in cfg.features
+                val pickedTarget = target.takeIf { canExclusive }
+                val chaining = canChain && chainOn
+                // 专属红包只能是普通红包、1 个：类型和个数锁死
+                val kind = if (pickedTarget != null) "normal" else kind
+                val multi = isGroup && pickedTarget == null
                 val amount = wholeNumber(amountText)
-                val count = if (isGroup) wholeNumber(countText) else 1
+                val count = if (multi) wholeNumber(countText) else 1
                 val total = if (amount == null || count == null) null else if (kind == "normal") amount.toLong() * count else amount.toLong()
-                val problem = validate(kind, amountText, if (isGroup) countText else "1", amount, count, limits)
+                val problem = validate(kind, amountText, if (multi) countText else "1", amount, count, limits)
+                    ?: if (chaining && chainText.isBlank() && amount != null) RpProblem("chain", "接龙口令还没填：领的人会自动发出这句话") else null
                 val dailyLeft = (limits.dailyLimit - cfg.sentToday).coerceAtLeast(0)
                 val dailyUsedUp = dailyLeft == 0 || serverDaily
                 val closed = !cfg.enabled
@@ -339,23 +374,32 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
                 val after = if (bal != null && total != null) bal.balance - total else null
                 val short = after != null && after < 0
                 val locked = muted != null || closed
-                val ready = !locked && !unbound && !dailyUsedUp && amount != null && count != null && problem == null && !short
+                val ready = !locked && !unbound && !dailyUsedUp && amount != null && count != null && problem == null && !short && !(chaining && chainText.isBlank())
 
                 Column(
                     Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (isGroup) {
-                        Segmented(listOf("拼手气红包", "普通红包"), if (kind == "lucky") 0 else 1, { edit { kind = if (it == 0) "lucky" else "normal" } })
+                        Box(Modifier.graphicsLayer { alpha = if (pickedTarget != null) 0.45f else 1f }) {
+                            Segmented(listOf("拼手气红包", "普通红包"), if (kind == "lucky") 0 else 1, { if (pickedTarget == null) edit { kindChoice = if (it == 0) "lucky" else "normal" } })
+                        }
                         Text(
-                            if (kind == "lucky") "总金额随机分给每个人，看谁手气好" else "每个人领到的一样多",
+                            when {
+                                pickedTarget != null -> "专属红包只能是普通红包、1 个，类型和个数已固定"
+                                kind == "lucky" -> "总金额随机分给每个人，看谁手气好"
+                                else -> "每个人领到的一样多"
+                            },
                             style = type.caption,
                             color = colors.subtle,
                             modifier = Modifier.padding(start = 4.dp),
                         )
                     }
+                    if (canExclusive) {
+                        RpTargetRow(pickedTarget, enabled = !locked, onPick = { picking = true }, onClear = { edit { target = null } })
+                    }
                     RpField(
-                        label = if (kind == "lucky") "总金额" else if (isGroup) "单个金额" else "金额",
+                        label = if (kind == "lucky") "总金额" else if (multi) "单个金额" else "金额",
                         value = amountText,
                         onChange = { edit { amountText = it.filter(Char::isDigit).take(7) } },
                         unit = "币",
@@ -367,12 +411,12 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
                     if (isGroup) {
                         RpField(
                             label = "红包个数",
-                            value = countText,
+                            value = if (pickedTarget != null) "1" else countText,
                             onChange = { edit { countText = it.filter(Char::isDigit).take(4) } },
                             unit = "个",
                             placeholder = "最多 ${limits.maxCount}",
                             bad = problem?.field == "count",
-                            enabled = !locked,
+                            enabled = !locked && pickedTarget == null,
                         )
                     }
                     RpField(
@@ -384,6 +428,28 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
                         numeric = false,
                         enabled = !locked,
                     )
+                    if (canChain) {
+                        RpSwitchRow(
+                            label = "接龙",
+                            hint = if (chaining) "领的人会自动在群里发出这句口令" else "领取时自动发一句口令",
+                            checked = chainOn,
+                            enabled = !locked,
+                            onChange = { edit { chainOn = it } },
+                        )
+                        if (chaining) {
+                            RpField(
+                                label = "口令",
+                                value = chainText,
+                                // 口令不能换行：粘贴进来的换行折成空格
+                                onChange = { raw -> raw.replace(Regex("""[\r\n\u2028\u2029]+"""), " ").let { if (it.length <= 30) edit { chainText = it } } },
+                                unit = "${chainText.length}/30",
+                                placeholder = "例如：谢谢老板",
+                                numeric = false,
+                                bad = problem?.field == "chain",
+                                enabled = !locked,
+                            )
+                        }
+                    }
 
                     problem?.let { RpNote(it.text, danger = true) }
                     muted?.let { RpNote(it, danger = true) }
@@ -452,6 +518,8 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
                                     put("amount", amount)
                                     put("count", count)
                                     if (greeting.isNotBlank()) put("greeting", greeting.trim())
+                                    if (chaining) put("chain_text", chainText.trim())
+                                    pickedTarget?.let { put("target_user_id", it.userId) }
                                 }).asObj()
                             }.onSuccess { result ->
                                 controller.accept(result?.get("message"))
@@ -479,6 +547,64 @@ internal fun RedPacketSendSheet(controller: ChatController, isGroup: Boolean, mu
                 }
             }
         }
+    }
+    // 选专属红包的领取人：叠在发红包面板上面，选好回来，已经填的都还在
+    if (picking) {
+        MemberPickSheet(controller, title = "专属红包给谁", excludeMe = true, onDismiss = { picking = false }) {
+            edit { target = it }
+            picking = false
+        }
+    }
+}
+
+/** 专属红包的领取人：没选时是一行「指定一位群成员」，选了显示头像 + 名字，右边可以清掉 */
+@Composable
+private fun RpTargetRow(target: MemberLite?, enabled: Boolean, onPick: () -> Unit, onClear: () -> Unit) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.panelMuted)
+            .clickable(enabled = enabled, onClick = onPick)
+            .padding(start = 16.dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("专属", style = type.rowTitle, color = colors.text, modifier = Modifier.width(76.dp))
+        if (target == null) {
+            Text("指定一位群成员，只有 Ta 能领", style = type.body, color = colors.subtle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            KcIcon(KcIcons.chevron, tint = colors.subtle, size = 16.dp)
+        } else {
+            Avatar(target.avatarUrl, target.name, tone = target.userId, size = 24.dp)
+            Text(target.name, style = type.body, color = colors.text, fontWeight = FontWeight.W600, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).weight(1f))
+            Box(
+                Modifier.size(32.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onClear),
+                contentAlignment = Alignment.Center,
+            ) { KcIcon(KcIcons.close, tint = colors.muted, size = 16.dp, contentDescription = "不指定") }
+        }
+    }
+}
+
+/** 表单里的开关行：左标签、中间一句说明、右开关 */
+@Composable
+private fun RpSwitchRow(label: String, hint: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.panelMuted)
+            .clickable(enabled = enabled) { onChange(!checked) }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = type.rowTitle, color = colors.text, modifier = Modifier.width(76.dp))
+        Text(hint, style = type.secondary, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+        KcSwitch(checked, onChange, enabled)
     }
 }
 
@@ -574,7 +700,7 @@ internal fun CoinGlyph(size: Dp, modifier: Modifier = Modifier) {
 /** 聊天页入口：缓存用 controller.redPackets，私聊 / 群从会话列表判断 */
 @Composable
 internal fun RedPacketOpenSheet(controller: ChatController, meta: RedPacketMeta, onDismiss: () -> Unit) {
-    val source = remember(controller) { RedPacketSource(controller.graph, controller.redPackets, controller::settlePendingRedPacket) }
+    val source = remember(controller) { RedPacketSource(controller.graph, controller.redPackets, controller::settlePendingRedPacket, controller::accept) }
     val isGroup = controller.graph.conversations.find(controller.conversationId)?.isGroup ?: true
     RedPacketDialog(source, meta, isGroup, controller.myId, initialDetail = false, onDismiss = onDismiss)
 }
@@ -624,6 +750,8 @@ internal fun RedPacketDialog(
     val ownDirect = mine && !isGroup
     val ended = packet?.endedStatus ?: endedBy
     val busy = opening || revealing
+    // 给别人的专属红包（包括我发给别人的）：只能看，不能领
+    val forOthers = packet?.forOthers(myId) ?: meta.forOthers(myId)
     val showDetail = !busy && (wantDetail || packet?.claimedByMe == true || ownDirect)
 
     fun open() {
@@ -694,6 +822,7 @@ internal fun RedPacketDialog(
                     isGroup = isGroup,
                     myId = myId,
                     mine = mine,
+                    forOthers = forOthers,
                     ended = ended,
                     justClaimed = justClaimed,
                     loadError = loadError,
@@ -707,6 +836,8 @@ internal fun RedPacketDialog(
                     meta = meta,
                     ended = ended,
                     mine = mine,
+                    myId = myId,
+                    forOthers = forOthers,
                     opening = opening,
                     revealing = revealing,
                     flap = flap.value,
@@ -734,6 +865,8 @@ private fun EnvelopeFace(
     meta: RedPacketMeta,
     ended: String?,
     mine: Boolean,
+    myId: Long?,
+    forOthers: Boolean,
     opening: Boolean,
     revealing: Boolean,
     flap: Float,
@@ -747,7 +880,10 @@ private fun EnvelopeFace(
     val type = KcTheme.type
     val pop = remember { Animatable(0.82f) }
     LaunchedEffect(Unit) { pop.animateTo(1f, spring(dampingRatio = 0.58f, stiffness = 320f)) }
-    val canOpen = packet != null && ended == null && !packet.claimedByMe
+    val canOpen = packet != null && ended == null && !packet.claimedByMe && !forOthers
+    val chainText = packet?.chainText ?: meta.chainText
+    val targetId = packet?.targetUserId ?: meta.targetUserId
+    val targetName = packet?.targetName ?: meta.targetName ?: "Ta"
     BoxWithConstraints(
         Modifier
             .widthIn(max = 310.dp)
@@ -798,12 +934,28 @@ private fun EnvelopeFace(
             if (mine && ended != null && ended != "finished") {
                 Text("未领完的金币已退回余额", style = type.caption, color = Color.White.copy(alpha = 0.8f))
             }
-            if (packet != null && (ended != null || mine)) {
+            if (forOthers && ended == null && packet != null) {
+                Text(
+                    if (mine) "专属红包只有 $targetName 能领" else "这是给 $targetName 的专属红包，只有 Ta 能领",
+                    style = type.caption,
+                    color = Color.White.copy(alpha = 0.8f),
+                    textAlign = TextAlign.Center,
+                )
+            }
+            if (packet != null && (ended != null || mine || forOthers)) {
                 Row(
                     Modifier.clip(RoundedCornerShape(16.dp)).clickable(enabled = !opening, onClick = onViewClaims).padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(if (mine && ended == null) "查看领取进度" else "看看大家的手气", style = type.secondary, color = RpColors.Gold)
+                    Text(
+                        when {
+                            mine && ended == null -> "查看领取进度"
+                            forOthers -> "查看详情"
+                            else -> "看看大家的手气"
+                        },
+                        style = type.secondary,
+                        color = RpColors.Gold,
+                    )
                     KcIcon(KcIcons.chevron, tint = RpColors.Gold, size = 14.dp)
                 }
             }
@@ -849,11 +1001,17 @@ private fun EnvelopeFace(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 12.dp),
                 )
-                if (packet != null || meta.kind == "lucky") {
+                if (packet != null || meta.kind == "lucky" || chainText != null || targetId != null) {
                     Text(
-                        if ((packet?.kind ?: meta.kind) == "lucky") "拼手气红包" else "普通红包",
+                        when {
+                            targetId != null && targetId == myId -> "给你的" + redPacketKindLabel(packet?.kind ?: meta.kind, chainText != null, true)
+                            targetId != null -> "给 $targetName 的" + redPacketKindLabel(packet?.kind ?: meta.kind, chainText != null, true)
+                            else -> redPacketKindLabel(packet?.kind ?: meta.kind, chainText != null, false)
+                        },
                         style = type.caption,
                         color = RpColors.Gold.copy(alpha = 0.85f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
@@ -867,6 +1025,18 @@ private fun EnvelopeFace(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 16.dp),
                 )
+                // 接龙：先说清楚领了会替我发什么
+                if (chainText != null && ended == null && !forOthers && packet?.claimedByMe != true) {
+                    Text(
+                        "领取后会以你的身份发出「$chainText」",
+                        style = type.caption,
+                        color = Color.White.copy(alpha = 0.78f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
             // 关闭
             Box(
@@ -980,6 +1150,7 @@ private fun ClaimDetail(
     isGroup: Boolean,
     myId: Long?,
     mine: Boolean,
+    forOthers: Boolean,
     ended: String?,
     justClaimed: Boolean,
     loadError: String?,
@@ -1025,7 +1196,7 @@ private fun ClaimDetail(
         Row(Modifier.padding(top = 10.dp, start = 20.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("${packet?.senderName ?: "有人"} 的红包", style = type.rowTitle, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (isGroup) {
-                val lucky = (packet?.kind ?: meta.kind) == "lucky"
+                val lucky = (packet?.kind ?: meta.kind) == "lucky" && (packet?.targetUserId ?: meta.targetUserId) == null
                 Text(
                     if (lucky) "拼" else "普",
                     fontSize = 11.sp,
@@ -1042,6 +1213,15 @@ private fun ClaimDetail(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp, start = 24.dp, end = 24.dp),
         )
+        // 接龙口令、专属对象：细描边的小胶囊，黑白克制
+        val chainText = packet?.chainText ?: meta.chainText
+        val targetId = packet?.targetUserId ?: meta.targetUserId
+        if (chainText != null || targetId != null) {
+            Row(Modifier.padding(top = 8.dp, start = 20.dp, end = 20.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (targetId != null) RpTag(if (targetId == myId) "给你的专属红包" else "给 ${packet?.targetName ?: meta.targetName ?: "Ta"} 的专属红包")
+                if (chainText != null) RpTag("接龙 · $chainText")
+            }
+        }
 
         // 金额 / 结果
         Box(Modifier.padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
@@ -1063,6 +1243,11 @@ private fun ClaimDetail(
                     )
                 }
                 ended != null -> Text(endedSentence(ended), style = type.title, color = colors.text)
+                packet != null && forOthers -> Text(
+                    if (packet.claimedCount > 0) "对方已领取" else "等待 ${packet.targetName ?: meta.targetName ?: "Ta"} 领取",
+                    style = type.secondary,
+                    color = colors.muted,
+                )
                 packet != null -> RedButton("我也开一个", enabled = true, modifier = Modifier.width(180.dp), onClick = onBackToOpen)
             }
         }
@@ -1097,6 +1282,21 @@ private fun ClaimDetail(
             }
         }
     }
+}
+
+/** 详情里的小标签：细描边胶囊 */
+@Composable
+private fun RpTag(text: String) {
+    val colors = KcTheme.colors
+    Text(
+        text,
+        style = KcTheme.type.caption,
+        color = colors.text,
+        fontWeight = FontWeight.W600,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.widthIn(max = 220.dp).clip(RoundedCornerShape(50)).border(1.dp, colors.border, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 3.dp),
+    )
 }
 
 /** 领取名单的一行：头像 · 名字 / 时间 · 金额 + 手气最佳 */

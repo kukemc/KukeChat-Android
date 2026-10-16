@@ -61,16 +61,49 @@ fun pollOf(message: Message): PollData? {
 
 // ------------------------------------------------------------------ 红包
 
-data class RedPacketMeta(val id: Long, val kind: String, val greeting: String, val count: Int)
+/**
+ * 红包消息 metadata.red_packet 里不会变的那几项。接龙红包多 chain_text，专属红包多 target_user_id / target（发的时候的快照），
+ * 普通红包没有这几项（docs/red-packets.md 3.2、3.6）。
+ */
+data class RedPacketMeta(
+    val id: Long,
+    val kind: String,
+    val greeting: String,
+    val count: Int,
+    val chainText: String? = null,
+    val targetUserId: Long? = null,
+    val targetName: String? = null,
+) {
+    val exclusive: Boolean get() = targetUserId != null
+
+    /** 专属红包、而且不是给 [myId] 的：只能看详情，不能领 */
+    fun forOthers(myId: Long?): Boolean = targetUserId != null && targetUserId != myId
+}
 
 fun redPacketMetaOf(message: Message): RedPacketMeta? {
     val packet = message.metadata?.o("red_packet") ?: return null
+    val target = packet.o("target")
     return RedPacketMeta(
         id = packet.l("id") ?: return null,
         kind = packet.s("kind") ?: "normal",
         greeting = packet.s("greeting")?.takeIf { it.isNotBlank() } ?: "恭喜发财，大吉大利",
         count = packet.i("count") ?: 1,
+        chainText = packet.s("chain_text")?.takeIf { it.isNotBlank() },
+        targetUserId = packet.l("target_user_id") ?: target?.l("id"),
+        targetName = target?.let(::displayName),
     )
+}
+
+/** 接龙红包领取时自动发出的那条文字消息：metadata.red_packet_chain.red_packet_id（docs/red-packets.md 3.6.1） */
+fun redPacketChainOf(message: Message): Long? = message.metadata?.o("red_packet_chain")?.l("red_packet_id")
+
+/** 红包的玩法名：普通 / 拼手气之外，接龙、专属、专属接龙 */
+fun redPacketKindLabel(kind: String, chain: Boolean, exclusive: Boolean): String = when {
+    exclusive && chain -> "专属接龙红包"
+    exclusive -> "专属红包"
+    chain -> if (kind == "lucky") "拼手气接龙红包" else "接龙红包"
+    kind == "lucky" -> "拼手气红包"
+    else -> "普通红包"
 }
 
 data class RedPacketClaim(val userId: Long?, val name: String, val avatarUrl: String?, val amount: Int, val luckiest: Boolean, val createdAt: String? = null)
@@ -95,7 +128,13 @@ data class RedPacketState(
     val expiresAt: String? = null,
     val createdAt: String? = null,
     val finishedAt: String? = null,
+    val chainText: String? = null,
+    val targetUserId: Long? = null,
+    val targetName: String? = null,
+    val targetAvatar: String? = null,
 ) {
+    val exclusive: Boolean get() = targetUserId != null
+    fun forOthers(myId: Long?): Boolean = targetUserId != null && targetUserId != myId
     val active: Boolean get() = status == "active"
     val claimedByMe: Boolean get() = myAmount != null
     val lucky: Boolean get() = kind == "lucky"
@@ -173,6 +212,10 @@ fun parseRedPacket(obj: JsonObject): RedPacketState? {
         expiresAt = obj.s("expires_at"),
         createdAt = obj.s("created_at"),
         finishedAt = obj.s("finished_at"),
+        chainText = obj.s("chain_text")?.takeIf { it.isNotBlank() },
+        targetUserId = obj.l("target_user_id") ?: obj.o("target")?.l("id"),
+        targetName = obj.o("target")?.let(::displayName),
+        targetAvatar = obj.o("target")?.s("avatar_url"),
     )
 }
 

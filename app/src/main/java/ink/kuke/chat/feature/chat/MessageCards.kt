@@ -174,15 +174,23 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
         }
     }
     val ended = remember(state, tick) { state?.endedStatus }
-    val dim = state != null && (state.claimedByMe || ended != null)
+    val myId = callbacks.myId
+    val chainText = state?.chainText ?: meta.chainText
+    val targetId = state?.targetUserId ?: meta.targetUserId
+    val targetName = state?.targetName ?: meta.targetName ?: "Ta"
+    val toMe = targetId != null && targetId == myId
+    // 给别人的专属红包：我领不了，卡片按「看得到、领不了」的褪色样子画
+    val forOthers = targetId != null && !toMe
+    val dim = state != null && (state.claimedByMe || ended != null) || forOthers
     val count = state?.count ?: meta.count
     val stateText = when {
-        state == null -> "领取红包"
-        state.claimedByMe -> "已领取 ${state.myAmount} 币"
+        state?.claimedByMe == true -> "已领取 ${state.myAmount} 币"
         ended == "finished" && count == 1 -> "已被领取"
         ended == "finished" -> "已领完"
         ended == "expired" -> "已过期"
         ended == "revoked" -> "已撤回"
+        forOthers -> "给 $targetName 的专属红包"
+        toMe -> "给你的专属红包 · 领取"
         else -> "领取红包"
     }
     val press = rememberInteraction()
@@ -204,6 +212,7 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
                     drawCircle(Color.White.copy(alpha = 0.08f), radius = size.height * 1.1f, center = Offset(size.width * 1.02f, -size.height * 0.35f))
                 },
         ) {
+            Column {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
@@ -217,8 +226,19 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
                 ) { Text("福", fontSize = 19.sp, fontWeight = FontWeight.W700, color = Color(0xFFB0281C)) }
                 Column(Modifier.padding(start = 10.dp)) {
                     Text(meta.greeting, style = type.rowTitle, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(stateText, style = type.caption, color = Color(0xFFFFE9B0).copy(alpha = if (dim) 0.95f else 0.9f), modifier = Modifier.padding(top = 1.dp))
+                    Text(stateText, style = type.caption, color = Color(0xFFFFE9B0).copy(alpha = if (dim) 0.95f else 0.9f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
                 }
+            }
+            // 接龙口令：领了就会以自己的身份发出这句话，先写在卡片上
+            if (chainText != null) {
+                Row(
+                    Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("接龙", fontSize = 11.sp, fontWeight = FontWeight.W600, color = Color(0xFFFFD98A))
+                    Text(chainText, style = type.caption, color = Color.White.copy(alpha = 0.92f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
+                }
+            }
             }
         }
         Row(
@@ -226,8 +246,9 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KcIcon(KcIcons.redPacket, tint = Color.White.copy(alpha = 0.8f), size = 12.dp)
+            val plain = chainText == null && targetId == null && (state?.kind ?: meta.kind) != "lucky"
             Text(
-                if ((state?.kind ?: meta.kind) == "lucky") "拼手气红包" else "KukeChat 红包",
+                if (plain) "KukeChat 红包" else redPacketKindLabel(state?.kind ?: meta.kind, chainText != null, targetId != null),
                 style = type.caption,
                 color = Color.White.copy(alpha = 0.82f),
                 modifier = Modifier.padding(start = 4.dp).weight(1f),

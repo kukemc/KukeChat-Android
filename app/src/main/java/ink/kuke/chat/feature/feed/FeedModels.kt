@@ -30,6 +30,8 @@ data class CcwCreation(
     val description: String? = null,
     @SerialName("cover_url") val coverUrl: String? = null,
     @SerialName("author_name") val authorName: String = "",
+    @SerialName("author_avatar_url") val authorAvatarUrl: String? = null,
+    val version: String? = null,
     @SerialName("view_count") val viewCount: Int? = null,
     @SerialName("like_count") val likeCount: Int? = null,
     @SerialName("comment_count") val commentCount: Int? = null,

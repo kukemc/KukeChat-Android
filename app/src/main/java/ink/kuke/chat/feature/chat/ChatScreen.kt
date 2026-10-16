@@ -313,6 +313,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             onOpenRedPacket = { _, meta -> overlay = Overlay.RedPacket(meta) },
             redPacketState = { id -> controller.redPackets[id] },
             loadRedPacket = controller::loadRedPacket,
+            myId = me?.id,
             onOpenBundle = { overlay = Overlay.Bundle(it) },
             onOpenShare = { message -> shareRouteOf(message)?.let(nav::go) },
             onOpenFile = { openFile = it },

@@ -168,6 +168,18 @@ fun Composer(
         if (focusRequests == 0 || voiceMode) return@LaunchedEffect
         androidx.compose.runtime.withFrameNanos { }
         runCatching { focus.requestFocus() }
+        // 输入框原本就有焦点时 requestFocus 不会再弹键盘（比如刚被点消息区收起）：显式弹一次
+        keyboard?.show()
+    }
+    // 设置了引用（右滑消息 / 长按菜单「引用」）：收起表情 / 更多面板、切回文字输入，等引用条出来后聚焦并弹键盘
+    val quoteRequests = controller.quoteRequests.intValue
+    // 输入框重新进入组合时（比如盖过它的整页关掉）不重放之前那次引用
+    val quoteSeen = remember { controller.quoteRequests.intValue }
+    LaunchedEffect(quoteRequests) {
+        if (quoteRequests == quoteSeen) return@LaunchedEffect
+        panel = Panel.None
+        voiceMode = false
+        requestInputFocus()
     }
     // 长按头像 @ 他：在光标处插入「@名字 」并登记成真正的 @（发送时带上 mention），语音模式下先切回文字
     val mentionRequest = controller.mentionRequest.value
