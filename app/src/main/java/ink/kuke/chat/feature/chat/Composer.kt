@@ -6,6 +6,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.border
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.ui.draw.drawBehind
@@ -453,12 +456,40 @@ private fun EmojiPanel(
     fun goTab(page: Int) { pagerScope.launch { pager.animateScrollToPage(page) } }
     var keyword by remember { mutableStateOf<String?>(null) }
     var stickers by remember { mutableStateOf<List<String>?>(null) }
-    val graph = (LocalContext.current.applicationContext as ink.kuke.chat.KukeApp).graph
+    val context = LocalContext.current
+    val graph = (context.applicationContext as ink.kuke.chat.KukeApp).graph
+    suspend fun loadStickers(): List<String> =
+        (graph.api.get("/stickers/favorites") as JsonArray).mapNotNull { (it as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull }
     LaunchedEffect(tab) {
         if (tab == 2 && stickers == null) {
-            stickers = runCatching {
-                (graph.api.get("/stickers/favorites") as JsonArray).mapNotNull { (it as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull }
-            }.getOrDefault(emptyList())
+            stickers = runCatching { loadStickers() }.getOrDefault(emptyList())
+        }
+    }
+    // 收藏页最前面的「+」：相册多选（一次最多 20 张）→ 逐张上传到消息图片通道 → 加进收藏表情，显示「正在添加 3/8」
+    var adding by remember { mutableStateOf<String?>(null) }
+    val pickStickers = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(STICKER_PICK_MAX)) { uris ->
+        if (uris.isEmpty() || adding != null) return@rememberLauncherForActivityResult
+        pagerScope.launch {
+            val failed = mutableListOf<String>()
+            uris.forEachIndexed { index, uri ->
+                adding = "正在添加 ${index + 1}/${uris.size}"
+                runCatching {
+                    checkStickerSource(context, uri)
+                    val url = uploadMessageImage(graph, context, uri)
+                    graph.api.post("/stickers/favorites", buildJsonObject { put("source_url", url) })
+                }.onFailure { failed += "第 ${index + 1} 张：" + (it.message?.takeIf { m -> m.isNotBlank() } ?: "添加失败") }
+            }
+            runCatching { loadStickers() }.onSuccess { stickers = it }
+            adding = null
+            val ok = uris.size - failed.size
+            toast(
+                context,
+                when {
+                    failed.isEmpty() -> "已添加 $ok 个表情"
+                    ok == 0 -> "添加失败：" + failed.take(3).joinToString("；")
+                    else -> "已添加 $ok 个，${failed.size} 个失败：" + failed.take(3).joinToString("；")
+                },
+            )
         }
     }
     Column(Modifier.fillMaxWidth().height(height).background(colors.panel).drawBehind { drawRect(colors.border, size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx())) }) {
@@ -489,8 +520,27 @@ private fun EmojiPanel(
                     val list = stickers
                     when {
                         list == null -> Text("加载中…", style = type.caption, color = colors.muted, modifier = Modifier.padding(16.dp))
-                        list.isEmpty() -> Text("还没有收藏表情。长按聊天里的图片可以添加到表情。", style = type.caption, color = colors.muted, modifier = Modifier.padding(16.dp))
                         else -> LazyVerticalGrid(GridCells.Fixed(4), Modifier.fillMaxSize().padding(8.dp)) {
+                            if (adding != null) item(span = { GridItemSpan(4) }) {
+                                Text(adding.orEmpty(), style = type.caption, color = colors.muted, modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 4.dp))
+                            }
+                            item(key = "add") {
+                                val busy = adding != null
+                                Box(
+                                    Modifier.padding(4.dp).size(76.dp).clip(RoundedCornerShape(8.dp))
+                                        .border(1.dp, colors.border, RoundedCornerShape(8.dp))
+                                        .clickable(enabled = !busy) {
+                                            pickStickers.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (busy) SendSpinner(18.dp, colors.muted, null)
+                                    else KcIcon(KcIcons.plus, tint = colors.muted, size = 24.dp, contentDescription = "添加表情")
+                                }
+                            }
+                            if (list.isEmpty()) item(span = { GridItemSpan(3) }) {
+                                Text("点「+」从相册添加，或长按聊天里的图片添加到表情", style = type.caption, color = colors.muted, modifier = Modifier.padding(8.dp))
+                            }
                             items(list) { url ->
                                 AsyncImage(
                                     model = Meta.imageUrl(url),
@@ -598,3 +648,14 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
 }
 
 private class Tool(val key: String, val label: String, val icon: ImageVector, val color: Color)
+
+/** 「+」一次最多选几张 */
+private const val STICKER_PICK_MAX = 20
+
+/** 收藏表情走消息图片上传（3MB，服务端 MAX_IMAGE_UPLOAD_BYTES）：静态图本地会压，动图不压（压了就不动了），超了先挡掉 */
+private fun checkStickerSource(context: android.content.Context, uri: android.net.Uri) {
+    val resolver = context.contentResolver
+    if (resolver.getType(uri) != "image/gif") return
+    val size = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }?.takeIf { it > 0 } ?: return
+    if (size > 3L * 1024 * 1024) error("动图超过 3MB")
+}

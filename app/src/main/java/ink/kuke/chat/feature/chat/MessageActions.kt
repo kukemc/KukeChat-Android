@@ -65,7 +65,7 @@ data class MessageAction(val key: String, val label: String, val icon: ImageVect
  * 「设为精华」只给群主 / 管理员；「撤回」给自己的消息（时限由服务端判断，超时会返回提示）和群管；
  * 红包、礼物消息服务端不允许转发，这里不给「转发」；「添加到表情」只在图片上出现。
  */
-fun actionsFor(message: Message, mine: Boolean, staff: Boolean): List<MessageAction> = buildList {
+fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String? = null): List<MessageAction> = buildList {
     val copyable = message.type == "text" || message.content.isNotBlank() && message.type !in listOf("image", "voice", "red_packet", "gift", "poll", "forward_bundle")
     if (copyable) add(MessageAction("copy", "复制", KcIcons.copy))
     add(MessageAction("quote", "引用", KcIcons.quote))
@@ -80,7 +80,8 @@ fun actionsFor(message: Message, mine: Boolean, staff: Boolean): List<MessageAct
     if (mine || staff) add(MessageAction("recall", "撤回", KcIcons.recall))
     add(MessageAction("delete", "删除", KcIcons.trash, danger = true))
     if (!mine) add(MessageAction("report", "举报", KcIcons.flag, danger = true))
-    if (message.type == "image") add(MessageAction("sticker", "添加到表情", KcIcons.imagePlus))
+    // 图片 / 表情消息，或长按了多图消息里的某一张（[imageUrl]）
+    if (message.type == "image" || imageUrl != null) add(MessageAction("sticker", "添加到表情", KcIcons.imagePlus))
 }
 
 /**
@@ -99,6 +100,8 @@ fun MessageActionsLayer(
     onDismiss: () -> Unit,
     /** 发送中 / 失败的本地消息：只给这几个操作（重发、删除），也不出表情回应 */
     pendingActions: List<MessageAction>? = null,
+    /** 长按的是多图消息里的某一张：给出「添加到表情」 */
+    imageUrl: String? = null,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -143,7 +146,7 @@ fun MessageActionsLayer(
                 MessageRow(message = message, mine = mine, isGroup = isGroup, showName = isGroup, callbacks = noop)
             }
             // 操作宫格 5 × N（展开表情面板时收起）
-            val actions = pendingActions ?: actionsFor(message, mine, staff)
+            val actions = pendingActions ?: actionsFor(message, mine, staff, imageUrl)
             if (!expanded) Column(
                 Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
                     .widthIn(max = 320.dp).fillMaxWidth()

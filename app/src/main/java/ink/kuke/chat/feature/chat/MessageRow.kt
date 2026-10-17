@@ -110,6 +110,8 @@ class MessageCallbacks(
     val onButton: (Message, BotButton) -> Unit = { _, _ -> },
     /** 多选模式下点一下 = 选中 / 取消 */
     val onToggleSelect: (Message) -> Unit = {},
+    /** 长按多图消息里的某一张：菜单里的「添加到表情」加的是这一张。默认同长按整条消息 */
+    val onImageLongPress: (Message, String) -> Unit = { message, _ -> onLongPress(message) },
 )
 
 private const val QUOTE_THRESHOLD_DP = 64
@@ -438,7 +440,7 @@ internal fun MessageBody(
                     // 长按出菜单（添加到表情、转发…）：外层气泡的长按收不到这里被点击接管的按下，得在这儿接
                     onLongClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        callbacks.onLongPress(message)
+                        if (url != null) callbacks.onImageLongPress(message, url) else callbacks.onLongPress(message)
                     },
                 ),
         )
@@ -535,7 +537,7 @@ internal fun MessageBody(
                 }
                 val images = Meta.images(message)
                 if (images.isNotEmpty()) {
-                    ImageGrid(images, callbacks, topGap = message.content.isNotBlank() || quote != null, overlay = imageOverlay)
+                    ImageGrid(message, images, callbacks, topGap = message.content.isNotBlank() || quote != null, overlay = imageOverlay)
                 }
             }
         }
@@ -544,9 +546,10 @@ internal fun MessageBody(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ImageGrid(
+    message: Message,
     images: List<String>,
     callbacks: MessageCallbacks,
     topGap: Boolean = true,
@@ -559,6 +562,7 @@ private fun ImageGrid(
         verticalArrangement = Arrangement.spacedBy(4.dp),
         maxItemsInEachRow = if (images.size == 4) 2 else 3,
     ) {
+        val haptics = LocalHapticFeedback.current
         images.forEachIndexed { index, raw ->
             val url = Meta.imageUrl(raw)
             Box {
@@ -566,7 +570,14 @@ private fun ImageGrid(
                     model = LocalImages.model(raw),
                     contentDescription = "图片",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(if (images.size == 1) 200.dp else 84.dp).clip(RoundedCornerShape(8.dp)).clickable { url?.let(callbacks.onOpenImage) },
+                    modifier = Modifier.size(if (images.size == 1) 200.dp else 84.dp).clip(RoundedCornerShape(8.dp)).combinedClickable(
+                        onClick = { url?.let(callbacks.onOpenImage) },
+                        // 长按某一张：菜单照常（转发、引用…），「添加到表情」加的是按住的这张（动图服务端原样保存）
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (url != null) callbacks.onImageLongPress(message, url) else callbacks.onLongPress(message)
+                        },
+                    ),
                 )
                 overlay?.invoke(this, index)
             }
