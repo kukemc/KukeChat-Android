@@ -44,7 +44,10 @@ internal fun ReactionUsersSheet(reactions: List<Reaction>, initialEmoji: String,
     var selected by remember { mutableStateOf(initialEmoji) }
     val current = reactions.firstOrNull { it.emoji == selected } ?: reactions.firstOrNull() ?: return
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        KcSheet(onDismiss = onDismiss, title = "表情回应", maxHeight = 520.dp) {
+        // 面板最高 520dp，且不超过屏幕高度的 75%（Dialog 里的窗口不一定是整屏，fillMaxSize 兜不住）；
+        // 名单用 weight(fill = false) 吃掉剩下的高度，人多时在面板里滚动，不会把面板撑出屏幕
+        val screen = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
+        KcSheet(onDismiss = onDismiss, title = "表情回应", maxHeight = minOf(520.dp, screen * 0.75f)) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -72,7 +75,7 @@ internal fun ReactionUsersSheet(reactions: List<Reaction>, initialEmoji: String,
                     Text("${current.count} 人回应了 ${current.emoji}", style = KcTheme.type.body, color = colors.muted)
                 }
             } else {
-                LazyColumn(Modifier.fillMaxWidth()) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
                     items(users, key = { it.id }) { user ->
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Avatar(user.avatarUrl, user.displayName, tone = user.id, size = 36.dp)
