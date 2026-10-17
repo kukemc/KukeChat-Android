@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import ink.kuke.chat.core.data.slot
 
 /** 群成员的精简视图（GET /conversations/{id}/members 的一项）。聊天里的 @ 面板、送礼选人、群资料页共用 */
 data class MemberLite(
@@ -42,6 +43,33 @@ fun parseMember(obj: JsonObject): MemberLite? {
         level = obj.i("level"),
         isBot = user?.b("is_bot") == true,
     )
+}
+
+/** 缓存里的一个群成员：只留身份标签和 @ 名字要用的 */
+@kotlinx.serialization.Serializable
+data class CachedMember(val id: Long, val role: String, val name: String)
+
+/**
+ * 群成员角色 / 名字的缓存（按会话，内存 + 磁盘，走 [ink.kuke.chat.core.data.ScreenCache]，按登录用户隔离、退出登录清掉）。
+ * 进聊天先用它画身份标签（「管理员」「群主」），成员列表拉回来再覆盖：不然每次进群标签都先是普通成员、几秒后才变。
+ * 消息本身不带发送者的角色（只有 sender_title / sender_level），角色只能从成员列表来。
+ */
+object MemberDirectory {
+    private val serializer = kotlinx.serialization.builtins.ListSerializer(CachedMember.serializer())
+
+    private fun slot(graph: ink.kuke.chat.core.AppGraph, conversationId: Long) =
+        graph.screenCache.slot<List<CachedMember>>("chat.members.$conversationId", serializer)
+
+    /** 上次看到的成员（内存没有就同步读磁盘，文件很小）；没有返回 null */
+    fun cached(graph: ink.kuke.chat.core.AppGraph, conversationId: Long): List<CachedMember>? = slot(graph, conversationId).get()
+
+    /** 拉一次完整成员列表并写回缓存 */
+    suspend fun refresh(graph: ink.kuke.chat.core.AppGraph, conversationId: Long): List<CachedMember> {
+        val list = parseMemberPage(graph.api.get("/conversations/$conversationId/members")).items
+            .map { CachedMember(it.userId, it.role, it.name) }
+        slot(graph, conversationId).put(list)
+        return list
+    }
 }
 
 /** 成员接口带分页参数时返回 {items, total, has_more}，否则是数组：两种都认 */

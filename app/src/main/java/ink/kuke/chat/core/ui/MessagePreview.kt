@@ -42,6 +42,12 @@ private val link = Regex("""\[([^\]]*)]\(([^)]*)\)""")
 
 /** 预览里不显示 Markdown 符号（机器人消息常带 # 标题、**加粗**、链接） */
 fun stripMarkdown(text: String): String = text
+    // 机器人正文里的 <markdown> 包裹去掉、<at id="12"/> 换成 @（预览里没有成员名可查）
+    .replace(Regex("""<\s*/?\s*(markdown|md)\b[^<>]*>""", RegexOption.IGNORE_CASE), "")
+    .replace(Regex("""<\s*(at_all|mention_all)\b[^<>]*>""", RegexOption.IGNORE_CASE), "@全体成员")
+    .replace(Regex("""<\s*(at|mention)\b([^<>]*?)/?\s*>""", RegexOption.IGNORE_CASE)) { m ->
+        Regex("""name\s*=\s*["']([^"']+)["']""").find(m.groupValues[2])?.let { "@" + it.groupValues[1] } ?: "@"
+    }
     .replace(link, "$1")
     .replace(headingMark, "")
     .replace(quoteMark, "")

@@ -134,6 +134,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     val controller = remember(conversationId) { ChatController(graph, conversationId, scope) }
     val listState = rememberLazyListState()
     var acting by remember { mutableStateOf<Message?>(null) }
+    /** 长按的是消息里的哪张图（多图消息）；长按整条消息时为空 */
+    var actingImage by remember { mutableStateOf<String?>(null) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var cardUserId by remember { mutableStateOf<Long?>(null) }
@@ -295,19 +297,16 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     // 聊天里点到邀请链接：进应用内的邀请页
     val inviteUriHandler = remember(uriHandler, nav) { InviteAwareUriHandler(uriHandler) { token -> nav.go(ink.kuke.chat.ui.shell.InviteRoute(token)) } }
 
-    // 群成员的角色（群主 / 管理员）：消息名字前的身份标签要用。进聊天拉一次；拉不到就只显示等级和专属头衔
-    val memberRoles by androidx.compose.runtime.produceState(emptyMap<Long, String>(), conversationId, isGroup) {
+    // 群成员的角色（群主 / 管理员）和名字：身份标签、机器人消息里的 <at id/> 要用。
+    // 消息不带发送者角色，只能从成员列表来：先用上次缓存的画（MemberDirectory，内存 + 磁盘），进聊天再拉一次覆盖；拉不到就留着缓存
+    val members by androidx.compose.runtime.produceState(
+        remember(conversationId) { MemberDirectory.cached(graph, conversationId).orEmpty() }, conversationId, isGroup,
+    ) {
         if (!isGroup) return@produceState
-        value = runCatching {
-            graph.api.get("/conversations/$conversationId/members").asItems().mapNotNull { item ->
-                val obj = item as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
-                val user = obj["user"] as? kotlinx.serialization.json.JsonObject
-                val id = ((user?.get("id") ?: obj["user_id"]) as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null
-                val role = (obj["role"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@mapNotNull null
-                id to role
-            }.toMap()
-        }.getOrDefault(emptyMap())
+        runCatching { MemberDirectory.refresh(graph, conversationId) }.onSuccess { value = it }
     }
+    val memberRoles = remember(members) { members.associate { it.id to it.role } }
+    val memberNames = remember(members) { members.associate { it.id to it.name } }
     val groupIdentity = remember(memberRoles, conversation?.levelTitlesEnabled, conversation?.levelTitles, me?.id, conversation?.myRole) {
         // 自己的角色以会话上的 my_role 为准（成员列表还没拉到时也对）
         val roles = if (me != null && conversation != null) memberRoles + (me.id to conversation.myRole) else memberRoles
@@ -320,7 +319,14 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 // 输入法还开着时，操作菜单会被键盘盖住：先收起键盘、取消输入框焦点
                 focusManager.clearFocus()
                 keyboardController?.hide()
+                actingImage = null
                 acting = it
+            },
+            onImageLongPress = { message, url ->
+                focusManager.clearFocus()
+                keyboardController?.hide()
+                actingImage = url
+                acting = message
             },
             onQuote = controller::quoteMessage,
             onAvatarLongPress = { message ->
@@ -371,7 +377,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     // 发出去以后：上下文模式下先回到最新，否则贴底
     val afterSend: () -> Unit = { if (controller.inContext) goLatest() else scope.launch { listState.animateScrollToItem(0) } }
 
-    androidx.compose.runtime.CompositionLocalProvider(LocalUriHandler provides inviteUriHandler) {
+    androidx.compose.runtime.CompositionLocalProvider(LocalUriHandler provides inviteUriHandler, LocalMemberNames provides memberNames) {
     Box(Modifier.fillMaxSize()) {
         // 长按菜单打开时下层模糊（设计稿 P04：backdrop-filter blur 6）
         Column(Modifier.fillMaxSize().blur(if (acting != null) 6.dp else 0.dp).background(colors.chat).imePadding()) {
@@ -620,6 +626,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 isGroup = isGroup,
                 mine = mine,
                 staff = staff,
+                imageUrl = actingImage,
                 onReaction = { emoji ->
                     controller.toggleReaction(message, emoji)
                     acting = null
@@ -646,7 +653,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                         "delete" -> controller.deleteForMe(message)
                         "forward" -> overlay = Overlay.Forward(listOf(message.id))
                         "select" -> controller.startSelecting(message)
-                        "sticker" -> Meta.imageUrl(message.content)?.let(controller::addToStickers)
+                        "sticker" -> (actingImage ?: Meta.imageUrl(message.content))?.let(controller::addToStickers)
                         "report" -> overlay = Overlay.Report(
                             ReportTarget(
                                 type = "message",
