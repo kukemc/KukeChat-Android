@@ -117,10 +117,10 @@ internal data class BiliVideo(
     val url: String,
 )
 
-/** 一个链接的预览：加载中 / 拿到了 / 拿不到（拿不到就不画卡片） */
+/** 一个链接的预览：加载中 / 拿到了 / 拿不到（拿不到就不画卡片；[Failed.at] 是失败的时刻，过了 [LinkPreviews.FAILURE_TTL_MS] 可以重试） */
 internal sealed interface LinkSlot<out T> {
     data object Loading : LinkSlot<Nothing>
-    data object Failed : LinkSlot<Nothing>
+    data class Failed(val at: Long = android.os.SystemClock.elapsedRealtime()) : LinkSlot<Nothing>
     data class Ready<T>(val value: T) : LinkSlot<T>
 }
 
@@ -129,31 +129,42 @@ internal object LinkPreviews {
     val ccw = mutableStateMapOf<String, LinkSlot<CcwCreation>>()
     val bili = mutableStateMapOf<String, LinkSlot<BiliVideo>>()
 
+    /** 失败（422 / 502 / 网络错误）只记 2 分钟；成功的一直留着 */
+    const val FAILURE_TTL_MS = 2 * 60 * 1000L
+
+    /** 要不要（重新）请求：没请求过，或者上次失败已经过期。正在请求中 / 已拿到的不再发 */
+    private fun needsFetch(slot: LinkSlot<*>?): Boolean = when (slot) {
+        null -> true
+        is LinkSlot.Failed -> android.os.SystemClock.elapsedRealtime() - slot.at >= FAILURE_TTL_MS
+        else -> false
+    }
+
+    /** 再次显示这条消息时调用（LaunchedEffect 进入组合）；失败过期后会重新请求 */
     fun ensureCcw(graph: AppGraph, ref: CcwLinkRef) {
-        if (ccw.containsKey(ref.key)) return
+        if (!needsFetch(ccw[ref.key])) return
         ccw[ref.key] = LinkSlot.Loading
         scope.launch {
             ccw[ref.key] = try {
                 val suffix = ref.accessKey?.let { "?accessKey=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
                 val creation = KcJson.decodeFromJsonElement(CcwCreation.serializer(), graph.api.get("/ccw/creations/${ref.oid}$suffix"))
-                if (creation.title.isBlank()) LinkSlot.Failed else LinkSlot.Ready(creation)
+                if (creation.title.isBlank()) LinkSlot.Failed() else LinkSlot.Ready(creation)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                LinkSlot.Failed
+                LinkSlot.Failed()
             }
         }
     }
 
     fun ensureBili(graph: AppGraph, url: String) {
-        if (bili.containsKey(url)) return
+        if (!needsFetch(bili[url])) return
         bili[url] = LinkSlot.Loading
         scope.launch {
             bili[url] = try {
                 val obj = graph.api.get("/link-preview/bilibili?url=" + URLEncoder.encode(url, "UTF-8")).asObj()
                 val bvid = obj?.s("bvid")
                 val title = obj?.s("title")
-                if (obj == null || bvid.isNullOrBlank() || title.isNullOrBlank()) LinkSlot.Failed
+                if (obj == null || bvid.isNullOrBlank() || title.isNullOrBlank()) LinkSlot.Failed()
                 else LinkSlot.Ready(
                     BiliVideo(
                         bvid = bvid,
@@ -168,7 +179,7 @@ internal object LinkPreviews {
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                LinkSlot.Failed
+                LinkSlot.Failed()
             }
         }
     }
