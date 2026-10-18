@@ -278,6 +278,25 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                                     }
                                 }
                             }
+                            // 「正在输入」：服务端按这个决定转不转发输入状态
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("显示正在输入", style = KcTheme.type.rowTitle, color = colors.text)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf("auto" to "自动（200 人以下显示）", "on" to "开启", "off" to "关闭").forEach { (value, label) ->
+                                        Chip(label, detail.typingIndicator == value) {
+                                            if (detail.typingIndicator != value) model.patch("/settings", buildJsonObject { put("typing_indicator", value) }, ::say)
+                                        }
+                                    }
+                                }
+                                Text(
+                                    when (detail.typingIndicator) {
+                                        "on" -> "大群里也会显示谁在输入"
+                                        "off" -> "群里不显示谁在输入"
+                                        else -> "成员超过 200 人时不显示谁在输入"
+                                    },
+                                    style = KcTheme.type.caption, color = colors.muted,
+                                )
+                            }
                         }
                     }
                     // 任务设置

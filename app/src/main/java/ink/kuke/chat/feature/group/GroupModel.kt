@@ -54,6 +54,8 @@ data class GroupDetail(
     /** 群任务：功能开关、谁可以创建（members / admins） */
     val tasksEnabled: Boolean = false,
     val taskCreationPermission: String = "members",
+    /** 「正在输入」：auto 只在 200 人以下的群显示 / on 大群也显示 / off 不显示（服务端决定转不转发）。旧服务端没有这个字段 → auto */
+    val typingIndicator: String = "auto",
 ) {
     val manager: Boolean get() = myRole == "owner" || myRole == "admin"
     val owner: Boolean get() = myRole == "owner"
@@ -85,6 +87,7 @@ fun parseGroupDetail(obj: JsonObject): GroupDetail = GroupDetail(
     pendingRequests = obj.i("pending_join_request_count") ?: 0,
     tasksEnabled = obj.b("tasks_enabled") == true,
     taskCreationPermission = obj.s("task_creation_permission") ?: "members",
+    typingIndicator = obj.s("typing_indicator")?.takeIf { it in setOf("auto", "on", "off") } ?: "auto",
 )
 
 data class CheckinStatus(val checkedInToday: Boolean, val total: Int, val streak: Int, val best: Int, val level: Int, val exp: Int, val nextExp: Int)
