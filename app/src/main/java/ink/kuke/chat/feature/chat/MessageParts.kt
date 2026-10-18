@@ -4,6 +4,7 @@ import android.media.MediaPlayer
 import android.view.Choreographer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
@@ -190,11 +191,15 @@ private fun AnnotatedString.Builder.appendMentions(text: String, mentions: List<
 /**
  * 语音播放：同一时间只放一条，再点一下停。
  * [progress] 是当前这条的播放进度（0–1），每帧从 MediaPlayer 读一次，气泡里的波形按它从左到右点亮。
+ * [playingId] 是正在放的那条的标识：聊天消息用消息 id；没有消息 id 的地方（风纪委员案件证据）自己给一个不会和 id 撞的键。
  */
 object VoicePlayer {
-    var playingId by mutableStateOf<Long?>(null)
+    var playingId by mutableStateOf<Any?>(null)
         private set
     var progress by mutableFloatStateOf(0f)
+        private set
+    /** 正在放的那条的总时长（毫秒）；准备好之前是 0 */
+    var durationMs by mutableLongStateOf(0L)
         private set
     private var player: MediaPlayer? = null
     private var prepared = false
@@ -213,19 +218,23 @@ object VoicePlayer {
         }
     }
 
-    fun toggle(message: Message) {
-        if (playingId == message.id) {
+    fun toggle(message: Message) = toggle(message.id, message.content)
+
+    /** 播放 / 停止 [key] 对应的语音，[url] 可以是相对地址 */
+    fun toggle(key: Any, url: String?) {
+        if (playingId == key) {
             stop()
             return
         }
         stop()
-        val url = Endpoints.absolute(message.content) ?: return
-        playingId = message.id
+        val absolute = Endpoints.absolute(url) ?: return
+        playingId = key
         progress = 0f
         player = MediaPlayer().apply {
-            setDataSource(url)
+            setDataSource(absolute)
             setOnPreparedListener {
                 prepared = true
+                durationMs = it.duration.toLong().coerceAtLeast(0L)
                 pendingSeek?.let { f -> if (it.duration > 0) it.seekTo((it.duration * f).toInt()) }
                 pendingSeek = null
                 it.start()
@@ -241,11 +250,13 @@ object VoicePlayer {
     }
 
     /** 拖动 / 点按语音条：跳到 [fraction]（0–1）。这一条正在放就直接跳；没在放就从这个位置开始放 */
-    fun seek(message: Message, fraction: Float) {
+    fun seek(message: Message, fraction: Float) = seek(message.id, message.content, fraction)
+
+    fun seek(key: Any, url: String?, fraction: Float) {
         val f = fraction.coerceIn(0f, 0.999f)
-        if (playingId != message.id) {
-            toggle(message)
-            if (playingId != message.id) return
+        if (playingId != key) {
+            toggle(key, url)
+            if (playingId != key) return
         }
         progress = f
         val p = player ?: return
@@ -260,6 +271,7 @@ object VoicePlayer {
         prepared = false
         playingId = null
         progress = 0f
+        durationMs = 0L
     }
 }
 
