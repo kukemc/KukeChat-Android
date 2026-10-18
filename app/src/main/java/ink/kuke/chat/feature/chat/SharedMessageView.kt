@@ -56,6 +56,7 @@ class ReadOnlyActions(
         onOpenBundle = openBundle,
         onOpenShare = openShare,
         onOpenFile = openFile,
+        menu = false,
     )
 }
 
@@ -64,7 +65,7 @@ private const val MAX_BUNDLE_DEPTH = 6
 
 /**
  * 只读视图的宿主：持有「看大图 / 嵌套合并转发详情栈 / 文件下载面板」的状态，content 里拿到 actions 用。
- * graph 为 null 时（合并转发里本来就不会有文件消息）不提供文件下载。
+ * 大图、合并转发详情、文件面板都画在 content 上面（整页覆盖）。graph 为 null 时（合并转发里本来就不会有文件消息）不提供文件下载。
  */
 @Composable
 fun ReadOnlyMessageHost(graph: AppGraph?, content: @Composable (ReadOnlyActions) -> Unit) {
@@ -97,6 +98,8 @@ fun ReadOnlyMessageHost(graph: AppGraph?, content: @Composable (ReadOnlyActions)
                 file = null
             }
         }
+        // 看大图盖在最上面（合并转发详情里点的图也在这儿开）
+        viewing?.let { ImageViewer(it) { viewing = null } }
     }
 }
 

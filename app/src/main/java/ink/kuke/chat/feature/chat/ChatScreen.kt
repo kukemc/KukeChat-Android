@@ -685,6 +685,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                         "bookmark" -> controller.bookmark(message)
                         "feature" -> scope.launch {
                             runCatching { graph.api.post("/conversations/$conversationId/messages/${message.id}/feature") }
+                                .onSuccess { result -> toast(context, if (result.asObj()?.b("featured") ?: !message.featured) "已设为精华" else "已取消精华") }
                                 .onFailure { error ->
                                     // 超出精华上限：服务端 409 featured_limit，提示并引导升级
                                     if (error.apiCode == "featured_limit") upgradeHint = error.userMessage()

@@ -241,10 +241,11 @@ private fun FeaturedRow(item: FeaturedItem, actions: ink.kuke.chat.feature.chat.
         if (!item.messageExists) append(" · 原消息已清理")
     }
     // 撤回的精华：内容已被服务端清掉，按「已撤回」画；快照缺失的只留空壳
+    // 原消息已被修剪的快照 id 是 0：换成精华 id 的负数，几条语音不会共用一个播放键（点一条、别的也显示在放）
     val message = when {
         item.recalled -> item.message.copy(recalledAt = item.message.recalledAt ?: "recalled")
         else -> item.message
-    }
+    }.let { if (it.id <= 0L) it.copy(id = -item.id) else it }
     if (item.snapshotMissing && message.content.isBlank() && message.metadata == null) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

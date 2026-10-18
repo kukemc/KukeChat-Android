@@ -3,6 +3,7 @@ package ink.kuke.chat.feature.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -76,6 +77,7 @@ fun fileMetaOf(message: Message): FileMeta? {
 }
 
 /** 群文件消息的卡片：图标 · 文件名 · 大小 · 有效期。点开走下载面板（视频直接进播放页）；在下载时底部画进度条 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun MessageFileCard(meta: FileMeta, onClick: () -> Unit) {
     val colors = KcTheme.colors
@@ -92,7 +94,7 @@ internal fun MessageFileCard(meta: FileMeta, onClick: () -> Unit) {
             .background(colors.panel, RoundedCornerShape(12.dp))
             .border(1.dp, colors.accent.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .combinedClickable(onLongClick = LocalMessageLongPress.current, onClick = onClick)
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -236,6 +237,7 @@ internal fun LinkPreviewCards(message: Message, modifier: Modifier = Modifier) {
 }
 
 /** 卡片外框：面板底、细描边、按下微缩 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun LinkCardFrame(onClick: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     val colors = KcTheme.colors
@@ -248,7 +250,7 @@ private fun LinkCardFrame(onClick: () -> Unit, content: @Composable ColumnScope.
             .clip(shape)
             .background(colors.panel)
             .border(1.dp, colors.border, shape)
-            .clickable(interactionSource = press, indication = null, onClick = onClick),
+            .combinedClickable(interactionSource = press, indication = null, onLongClick = LocalMessageLongPress.current, onClick = onClick),
         content = content,
     )
 }

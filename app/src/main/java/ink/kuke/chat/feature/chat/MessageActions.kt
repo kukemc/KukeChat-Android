@@ -63,13 +63,14 @@ data class MessageAction(val key: String, val label: String, val icon: ImageVect
 /**
  * 操作宫格（同电脑版右键菜单的顺序）：复制 引用 转发 多选 收藏 / 设为精华 撤回 删除 举报 添加到表情。
  * 「设为精华」只给群主 / 管理员；「撤回」给自己的消息（时限由服务端判断，超时会返回提示）和群管；
- * 红包、礼物消息服务端不允许转发，这里不给「转发」；「添加到表情」只在图片上出现。
+ * 红包、礼物、群文件消息服务端不允许转发（文件下载要鉴权，别的会话的人下不了），这里不给「转发」；「添加到表情」只在图片上出现。
+ * 「收藏」「设为精华」不挑类型：语音、文件、合并转发、投票、红包都可以（卡片上的长按见 MessageRow 的 LocalMessageLongPress）。
  */
 fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String? = null): List<MessageAction> = buildList {
     val copyable = message.type == "text" || message.content.isNotBlank() && message.type !in listOf("image", "voice", "red_packet", "gift", "poll", "forward_bundle")
     if (copyable) add(MessageAction("copy", "复制", KcIcons.copy))
     add(MessageAction("quote", "引用", KcIcons.quote))
-    if (message.type !in listOf("red_packet", "gift", "system")) add(MessageAction("forward", "转发", KcIcons.forward))
+    if (message.type !in listOf("red_packet", "gift", "system") && fileMetaOf(message) == null) add(MessageAction("forward", "转发", KcIcons.forward))
     add(MessageAction("select", "多选", KcIcons.checkSquare))
     add(MessageAction("bookmark", "收藏", KcIcons.bookmark))
     if (staff) add(MessageAction("feature", if (message.featured) "取消精华" else "设为精华", KcIcons.star))
@@ -109,7 +110,7 @@ fun MessageActionsLayer(
     var expanded by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appear.animateTo(1f, tween(220, easing = EaseSmooth)) }
     BackHandler(onBack = onDismiss)
-    val noop = remember { MessageCallbacks({}, {}, {}, { _, _ -> }, {}, {}) }
+    val noop = remember { MessageCallbacks({}, {}, {}, { _, _ -> }, {}, {}, menu = false) }
     val side = if (mine) Alignment.End else Alignment.Start
     BoxWithConstraints(
         Modifier

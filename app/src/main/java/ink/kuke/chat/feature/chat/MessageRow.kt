@@ -53,6 +53,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -112,7 +114,15 @@ class MessageCallbacks(
     val onToggleSelect: (Message) -> Unit = {},
     /** 长按多图消息里的某一张：菜单里的「添加到表情」加的是这一张。默认同长按整条消息 */
     val onImageLongPress: (Message, String) -> Unit = { message, _ -> onLongPress(message) },
+    /** 长按弹操作菜单。只读视图（收藏 / 精华 / 合并转发详情）没有菜单：卡片上的长按什么也不做，也不震动 */
+    val menu: Boolean = true,
 )
+
+/**
+ * 卡片（语音、文件、合并转发、红包、投票、名片、链接预览）自己接管了点按，外层气泡上的长按就收不到这次按下：
+ * 卡片在自己的点按上再接一个长按，弹出同一个操作菜单（收藏、设为精华、转发…）。由 MessageBody 提供；只读视图里是 null。
+ */
+internal val LocalMessageLongPress = compositionLocalOf<(() -> Unit)?> { null }
 
 private const val QUOTE_THRESHOLD_DP = 64
 
@@ -409,7 +419,6 @@ private fun rememberSenderSkin(message: Message): ink.kuke.chat.feature.shop.Bub
 }
 
 /** 消息正文。聊天页、精华、收藏、合并转发详情共用（只读场景见 SharedMessageView）。[skin] 只染文字气泡 */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun MessageBody(
     message: Message,
@@ -418,6 +427,29 @@ internal fun MessageBody(
     skin: ink.kuke.chat.feature.shop.BubbleSkin? = null,
     /** 叠在第 index 张图上的东西（发送中的上传转圈）。图片外面总是套一层 Box，有没有叠加结构都一样，换成服务端消息时图不重建 */
     imageOverlay: (@Composable androidx.compose.foundation.layout.BoxScope.(Int) -> Unit)? = null,
+) {
+    val haptics = LocalHapticFeedback.current
+    val longPress: (() -> Unit)? = if (callbacks.menu) {
+        remember(message, callbacks, haptics) {
+            {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                callbacks.onLongPress(message)
+            }
+        }
+    } else null
+    CompositionLocalProvider(LocalMessageLongPress provides longPress) {
+        MessageBodyContent(message, mine, callbacks, skin, imageOverlay)
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun MessageBodyContent(
+    message: Message,
+    mine: Boolean,
+    callbacks: MessageCallbacks,
+    skin: ink.kuke.chat.feature.shop.BubbleSkin?,
+    imageOverlay: (@Composable androidx.compose.foundation.layout.BoxScope.(Int) -> Unit)?,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -458,10 +490,10 @@ internal fun MessageBody(
                 .combinedClickable(
                     onClick = { url?.let(callbacks.onOpenImage) },
                     // 长按出菜单（添加到表情、转发…）：外层气泡的长按收不到这里被点击接管的按下，得在这儿接
-                    onLongClick = {
+                    onLongClick = if (callbacks.menu) ({
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (url != null) callbacks.onImageLongPress(message, url) else callbacks.onLongPress(message)
-                    },
+                    }) else null,
                 ),
         )
         imageOverlay?.invoke(this, 0)
@@ -515,7 +547,7 @@ internal fun MessageBody(
         Modifier
             .then(if (isVoice) Modifier.pressScale(voicePress, 0.97f) else Modifier)
             .then(if (skinPaint != null && skin != null) Modifier.bubbleSkin(skin, skinPaint, shape, message.id) else Modifier.shadow(if (mine) 0.dp else 1.dp, shape).background(if (mine) colors.bubbleOut else colors.bubbleIn, shape))
-            .then(if (isVoice) Modifier.clip(shape).clickable(interactionSource = voicePress, indication = null) { VoicePlayer.toggle(message) } else Modifier)
+            .then(if (isVoice) Modifier.clip(shape).combinedClickable(interactionSource = voicePress, indication = null, onLongClick = LocalMessageLongPress.current) { VoicePlayer.toggle(message) } else Modifier)
             .padding(if (pill) PaddingValues(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp) else PaddingValues(horizontal = 12.dp, vertical = 8.dp)),
     ) {
         quote?.let { quote ->
@@ -524,7 +556,7 @@ internal fun MessageBody(
                     .padding(bottom = 6.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .background(content.copy(alpha = 0.08f))
-                    .clickable { quote.messageId?.let(callbacks.onJumpToQuote) }
+                    .combinedClickable(onLongClick = LocalMessageLongPress.current) { quote.messageId?.let(callbacks.onJumpToQuote) }
                     .padding(horizontal = 8.dp, vertical = 5.dp),
             ) {
                 Box(Modifier.width(2.dp).height(30.dp).background(if (mine || skinPaint != null) content.copy(alpha = 0.5f) else colors.accent))
@@ -685,6 +717,7 @@ private fun voiceBubbleWidth(seconds: Long): Dp = (120f + 120f * sqrt((seconds -
  * 播放时波形按进度从左到右点亮（已放 = 强调色 / 白，未放 = 淡色）；自己的消息反色：白键、强调色图标、白条。
  * [inset] 是外层气泡左右内边距之和，内容宽度 = 气泡宽度 − inset。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
     val colors = KcTheme.colors
@@ -699,6 +732,8 @@ private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
     val levels = remember(message.id, voice.waveform) { voiceLevels(voice.waveform, message.id) }
     // 正在拖的位置（0–1）：拖动时进度跟着手指，松手才真的跳过去，免得边拖边卡顿
     var scrub by remember(message.id) { mutableStateOf<Float?>(null) }
+    // 波形自己接了点按（跳进度），长按也得在这儿接，不然按在波形上弹不出菜单
+    val longPress by androidx.compose.runtime.rememberUpdatedState(LocalMessageLongPress.current)
     Row(Modifier.width(voiceBubbleWidth(seconds) - inset).height(32.dp), verticalAlignment = Alignment.CenterVertically) {
         // 播放 ⇄ 暂停：一个缩小淡出、一个放大淡入
         Canvas(Modifier.size(32.dp)) {
@@ -727,7 +762,7 @@ private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
                 .height(32.dp)
                 // 波形上点一下 = 跳到那里；横着拖 = 拖进度（吃掉横划，不会触发引用 / 返回）
                 .pointerInput(message.id) {
-                    detectTapGestures { offset -> VoicePlayer.seek(message, offset.x / size.width.coerceAtLeast(1)) }
+                    detectTapGestures(onLongPress = { longPress?.invoke() }) { offset -> VoicePlayer.seek(message, offset.x / size.width.coerceAtLeast(1)) }
                 }
                 .pointerInput(message.id) {
                     detectHorizontalDragGestures(
@@ -793,6 +828,7 @@ internal fun resampleLevels(src: List<Float>, n: Int): List<Float> {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageCard(card: Meta.Card, onClick: (() -> Unit)? = null) {
     val colors = KcTheme.colors
@@ -813,7 +849,7 @@ private fun MessageCard(card: Meta.Card, onClick: (() -> Unit)? = null) {
             .shadow(1.dp, RoundedCornerShape(12.dp))
             .background(colors.panel, RoundedCornerShape(12.dp))
             .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
-            .then(if (onClick != null) Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clip(RoundedCornerShape(12.dp)).combinedClickable(onLongClick = LocalMessageLongPress.current, onClick = onClick) else Modifier)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

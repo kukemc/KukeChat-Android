@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +61,7 @@ import java.time.Duration
 import java.time.Instant
 
 /** 投票卡（设计稿 P03）：标题行 · 问题 · 选项条（票数条带生长动画）· 底部人数与操作 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun PollCard(message: Message, poll: PollData, callbacks: MessageCallbacks) {
     val colors = KcTheme.colors
@@ -98,7 +100,7 @@ internal fun PollCard(message: Message, poll: PollData, callbacks: MessageCallba
                     .clip(shape)
                     .background(colors.panelMuted)
                     .border(1.dp, if (mine) colors.accent else Color.Transparent, shape)
-                    .clickable(enabled = !closed) {
+                    .combinedClickable(enabled = !closed, onLongClick = LocalMessageLongPress.current) {
                         val next = when {
                             poll.multiple -> if (mine) poll.myOptionIds - option.id else poll.myOptionIds + option.id
                             mine -> emptyList()
@@ -157,6 +159,7 @@ private val CardDimStrip = Color(0xFFD97A61)
  * 红包卡：红底金封（「福」字金章）+ 祝福语 + 状态，底条写种类与进度。
  * 已领 / 已领完 / 已过期 / 已撤回换成褪色底、金章变淡；到点过期自己刷新一次（服务端不推过期事件）。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: MessageCallbacks) {
     val type = KcTheme.type
@@ -204,7 +207,7 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
             .pressScale(press, 0.97f)
             .shadow(if (dim) 0.5.dp else 2.dp, RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
-            .clickable(interactionSource = press, indication = null) { callbacks.onOpenRedPacket(message, meta) },
+            .combinedClickable(interactionSource = press, indication = null, onLongClick = LocalMessageLongPress.current) { callbacks.onOpenRedPacket(message, meta) },
     ) {
         Box(
             Modifier
@@ -383,6 +386,7 @@ internal fun GiftCard(gift: GiftMeta) {
 }
 
 /** 合并转发卡：标题 + 前三条摘要 + 「查看 N 条聊天记录」 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun ForwardCard(message: Message, callbacks: MessageCallbacks) {
     val colors = KcTheme.colors
@@ -393,7 +397,7 @@ internal fun ForwardCard(message: Message, callbacks: MessageCallbacks) {
             .widthIn(min = 220.dp, max = 270.dp)
             .shadow(1.dp, RoundedCornerShape(12.dp))
             .background(colors.panel, RoundedCornerShape(12.dp))
-            .clickable { callbacks.onOpenBundle(message) }
+            .combinedClickable(onLongClick = LocalMessageLongPress.current) { callbacks.onOpenBundle(message) }
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
