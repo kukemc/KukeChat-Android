@@ -117,7 +117,7 @@ private sealed interface Overlay {
  * 聊天页（设计稿 P03–P06）：顶栏 · 消息画布 · 浮在画布上的输入卡。
  * 往上翻到顶自动加载更早的消息；不在最底部时有新消息，右下出现「回到最新」胶囊。
  * 长按消息 → 快捷回应 + 操作宫格；右滑消息 → 引用回复；点图片 → 全屏看图；群聊双击头像 → 戳一戳。
- * 顶栏「更多」：搜索聊天记录、群精华、本会话收藏、群资料、清空聊天记录、举报。
+ * 顶栏「更多」：搜索聊天记录、群精华、群签到、本会话收藏、群资料、清空聊天记录、举报。
  */
 @Composable
 fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusMessageId: Long? = null) {
@@ -731,6 +731,12 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             "files" -> nav.go(GroupFilesRoute(conversationId))
                             "plus" -> nav.go(GroupPlusRoute(conversationId))
                             "featured" -> overlay = Overlay.Featured
+                            // 群签到：直接签（不附留言），结果一句话提示；想附留言还是去群资料页的签到面板
+                            "checkin" -> scope.launch {
+                                val outcome = ink.kuke.chat.feature.group.groupCheckin(graph, conversationId)
+                                if (outcome.ok) Haptics.confirm(view)
+                                toast(context, outcome.text)
+                            }
                             "bookmarks" -> overlay = Overlay.Bookmarks
                             "info" -> if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { if (it.isBot) openBot(it.id) else nav.go(UserRoute(it.id)) }
                             "intimacy" -> conversation?.directUser?.let { nav.go(ink.kuke.chat.ui.shell.IntimacyRoute(it.id)) }
@@ -1061,6 +1067,7 @@ private fun MoreMenu(conversation: Conversation?, onDismiss: () -> Unit, onPick:
             }
             MoreDivider()
             if (isGroup) {
+                MoreItem("签到", KcIcons.calendar) { close { onPick("checkin") } }
                 MoreItem("本会话收藏", KcIcons.bookmark) { close { onPick("bookmarks") } }
                 MoreItem("群资料", KcIcons.info) { close { onPick("info") } }
                 MoreDivider()

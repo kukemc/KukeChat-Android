@@ -99,6 +99,26 @@ fun parseCheckin(obj: JsonObject) = CheckinStatus(
     nextExp = obj.i("next_level_exp") ?: 0,
 )
 
+/** 签到的结果：ok = 这次签上了；text 是给人看的一句话 */
+class CheckinOutcome(val ok: Boolean, val text: String)
+
+/**
+ * 群签到（POST /conversations/{id}/checkin，可附带一句 ≤80 字的留言）。群资料页的签到面板和聊天页右上角「签到」共用。
+ * 今天已经签过：服务端 409，换成「今天已经签到过了」；其余失败用服务端的话。
+ */
+suspend fun groupCheckin(graph: AppGraph, conversationId: Long, note: String? = null): CheckinOutcome = try {
+    val message = note?.trim()?.take(80)?.takeIf { it.isNotEmpty() }
+    val result = graph.api.post(
+        "/conversations/$conversationId/checkin",
+        JsonObject(mapOf("message" to (message?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull))),
+    ).asObj()
+    CheckinOutcome(true, "签到成功，连续 ${result?.i("streak_days") ?: 1} 天" + (result?.i("exp_awarded")?.let { exp -> "，经验 +$exp" } ?: ""))
+} catch (e: kotlinx.coroutines.CancellationException) {
+    throw e
+} catch (e: Exception) {
+    CheckinOutcome(false, if ((e as? ink.kuke.chat.core.net.ApiException)?.status == 409) "今天已经签到过了" else e.userMessage())
+}
+
 enum class GroupLoad { Loading, Ready, NotMember, Failed }
 
 /**
@@ -173,16 +193,11 @@ class GroupModel(val graph: AppGraph, val id: Long, private val scope: Coroutine
     fun doCheckin(message: String? = null, done: (String) -> Unit) {
         if (checkinBusy) return
         checkinBusy = true
-        val note = message?.trim()?.take(80)?.takeIf { it.isNotEmpty() }
         scope.launch {
-            runCatching {
-                graph.api.post("/conversations/$id/checkin", JsonObject(mapOf("message" to (note?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)))).asObj()
-            }
-                .onSuccess {
-                    done("签到成功，连续 ${it?.i("streak_days") ?: 1} 天" + (it?.i("exp_awarded")?.let { exp -> "，经验 +$exp" } ?: ""))
-                    loadCheckin()
-                }
-                .onFailure { done(it.userMessage()) }
+            val outcome = groupCheckin(graph, id, message)
+            done(outcome.text)
+            // 签上了，或者其实今天已经签过（状态过期）：都重读一次
+            loadCheckin()
             checkinBusy = false
         }
     }
