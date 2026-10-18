@@ -64,7 +64,10 @@ class AppGraph(context: Context) {
             messageCache.clear()
             screenCache.clear()
         }
-        scope.launch(Dispatchers.Main) { ink.kuke.chat.feature.chat.Outbox.clear() }
+        scope.launch(Dispatchers.Main) {
+            ink.kuke.chat.feature.chat.Outbox.clear()
+            ink.kuke.chat.feature.chat.FavoriteStickers.clear()
+        }
         ink.kuke.chat.service.RealtimeService.stop(appContext)
         ink.kuke.chat.service.Notifier.cancelAll(appContext)
         ink.kuke.chat.service.CatchUpWorker.cancel(appContext)

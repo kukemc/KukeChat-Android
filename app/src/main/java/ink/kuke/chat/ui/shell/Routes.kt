@@ -43,6 +43,8 @@ import kotlinx.serialization.Serializable
 @Serializable data object LevelRoute
 @Serializable data class IntimacyRoute(val friendId: Long)
 @Serializable data object FavoritesRoute
+/** 收藏表情管理（表情面板「收藏」页的「+」）：添加、多选删除、拖动排序 */
+@Serializable data object StickersRoute
 @Serializable data object AnnouncementsRoute
 @Serializable data object JuryRoute
 @Serializable data object SettingsRoute

@@ -247,6 +247,7 @@ fun MainShell(graph: AppGraph, openConversationId: Long?, onConsumedOpen: () -> 
             page<RankingRoute> { RankingScreen(graph) }
             page<GiftRecordsRoute> { GiftRecordsScreen(graph) }
             page<FavoritesRoute> { FavoritesScreen(graph) }
+            page<StickersRoute> { ink.kuke.chat.feature.chat.StickerManagerScreen(graph) }
             page<AnnouncementsRoute> { AnnouncementsScreen(graph) }
 
             // 任务、机器人、风纪

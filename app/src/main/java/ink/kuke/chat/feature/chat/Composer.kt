@@ -24,6 +24,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import ink.kuke.chat.core.net.userMessage
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -140,7 +142,8 @@ fun Composer(
     var value by remember { mutableStateOf(Drafts.get(controller.conversationId).let { TextFieldValue(it, TextRange(it.length)) }) }
     // 文字里 @ 到的成员（发送时只保留文字里还在的）
     val mentions = remember { mutableListOf<Pair<Long, String>>() }
-    var panel by remember { mutableStateOf(Panel.None) }
+    // 可保存：从表情面板进「收藏表情」管理页再回来，面板还开着（停在收藏页）
+    var panel by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Panel.None) }
     var voiceMode by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -455,43 +458,22 @@ private fun EmojiPanel(
     val tab = pager.currentPage
     fun goTab(page: Int) { pagerScope.launch { pager.animateScrollToPage(page) } }
     var keyword by remember { mutableStateOf<String?>(null) }
-    var stickers by remember { mutableStateOf<List<String>?>(null) }
     val context = LocalContext.current
     val graph = (context.applicationContext as ink.kuke.chat.KukeApp).graph
-    suspend fun loadStickers(): List<String> =
-        (graph.api.get("/stickers/favorites") as JsonArray).mapNotNull { (it as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull }
-    LaunchedEffect(tab) {
-        if (tab == 2 && stickers == null) {
-            stickers = runCatching { loadStickers() }.getOrDefault(emptyList())
+    val nav = ink.kuke.chat.ui.shell.LocalAppNav.current
+    // 收藏表情：和管理页共用 FavoriteStickers 的列表（先显示上次的，第一次翻到收藏页时重拉一次）
+    val stickers = FavoriteStickers.items
+    var stickersRefreshed by remember { mutableStateOf(false) }
+    var stickersFailed by remember { mutableStateOf(false) }
+    LaunchedEffect(tab, stickersRefreshed) {
+        if (tab == 2 && !stickersRefreshed) {
+            stickersRefreshed = true
+            stickersFailed = false
+            runCatching { FavoriteStickers.load(graph) }.onFailure { stickersFailed = true }
         }
     }
-    // 收藏页最前面的「+」：相册多选（一次最多 20 张）→ 逐张上传到消息图片通道 → 加进收藏表情，显示「正在添加 3/8」
-    var adding by remember { mutableStateOf<String?>(null) }
-    val pickStickers = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(STICKER_PICK_MAX)) { uris ->
-        if (uris.isEmpty() || adding != null) return@rememberLauncherForActivityResult
-        pagerScope.launch {
-            val failed = mutableListOf<String>()
-            uris.forEachIndexed { index, uri ->
-                adding = "正在添加 ${index + 1}/${uris.size}"
-                runCatching {
-                    checkStickerSource(context, uri)
-                    val url = uploadMessageImage(graph, context, uri)
-                    graph.api.post("/stickers/favorites", buildJsonObject { put("source_url", url) })
-                }.onFailure { failed += "第 ${index + 1} 张：" + (it.message?.takeIf { m -> m.isNotBlank() } ?: "添加失败") }
-            }
-            runCatching { loadStickers() }.onSuccess { stickers = it }
-            adding = null
-            val ok = uris.size - failed.size
-            toast(
-                context,
-                when {
-                    failed.isEmpty() -> "已添加 $ok 个表情"
-                    ok == 0 -> "添加失败：" + failed.take(3).joinToString("；")
-                    else -> "已添加 $ok 个，${failed.size} 个失败：" + failed.take(3).joinToString("；")
-                },
-            )
-        }
-    }
+    /** 长按弹出小菜单的那个收藏表情 */
+    var stickerMenu by remember { mutableStateOf<FavoriteSticker?>(null) }
     Column(Modifier.fillMaxWidth().height(height).background(colors.panel).drawBehind { drawRect(colors.border, size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx())) }) {
         Box(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 4.dp)) {
             Row(
@@ -519,35 +501,48 @@ private fun EmojiPanel(
                 2 -> {
                     val list = stickers
                     when {
+                        list == null && stickersFailed -> StateText("收藏表情没加载出来", error = true, onRetry = { stickersRefreshed = false })
                         list == null -> Text("加载中…", style = type.caption, color = colors.muted, modifier = Modifier.padding(16.dp))
                         else -> LazyVerticalGrid(GridCells.Fixed(4), Modifier.fillMaxSize().padding(8.dp)) {
-                            if (adding != null) item(span = { GridItemSpan(4) }) {
-                                Text(adding.orEmpty(), style = type.caption, color = colors.muted, modifier = Modifier.padding(start = 6.dp, top = 2.dp, bottom = 4.dp))
-                            }
+                            // 「+」进收藏表情管理页：在那里添加、多选删除、拖动排序
                             item(key = "add") {
-                                val busy = adding != null
                                 Box(
                                     Modifier.padding(4.dp).size(76.dp).clip(RoundedCornerShape(8.dp))
                                         .border(1.dp, colors.border, RoundedCornerShape(8.dp))
-                                        .clickable(enabled = !busy) {
-                                            pickStickers.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                                        },
+                                        .clickable { nav.go(ink.kuke.chat.ui.shell.StickersRoute) },
                                     contentAlignment = Alignment.Center,
-                                ) {
-                                    if (busy) SendSpinner(18.dp, colors.muted, null)
-                                    else KcIcon(KcIcons.plus, tint = colors.muted, size = 24.dp, contentDescription = "添加表情")
-                                }
+                                ) { KcIcon(KcIcons.plus, tint = colors.muted, size = 24.dp, contentDescription = "添加和整理表情") }
                             }
                             if (list.isEmpty()) item(span = { GridItemSpan(3) }) {
                                 Text("点「+」从相册添加，或长按聊天里的图片添加到表情", style = type.caption, color = colors.muted, modifier = Modifier.padding(8.dp))
                             }
-                            items(list) { url ->
-                                AsyncImage(
-                                    model = Meta.imageUrl(url),
-                                    contentDescription = "收藏表情",
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier.padding(4.dp).size(76.dp).clip(RoundedCornerShape(8.dp)).clickable { onSticker(url) },
-                                )
+                            items(list, key = { it.assetId }) { sticker ->
+                                StickerCell(
+                                    sticker,
+                                    menuOpen = stickerMenu?.assetId == sticker.assetId,
+                                    onClick = { onSticker(sticker.url) },
+                                    onLongClick = { stickerMenu = sticker },
+                                ) {
+                                    StickerMenu(
+                                        first = list.firstOrNull()?.assetId == sticker.assetId,
+                                        onDismiss = { stickerMenu = null },
+                                        onAction = { action ->
+                                            stickerMenu = null
+                                            when (action) {
+                                                "manage" -> nav.go(ink.kuke.chat.ui.shell.StickersRoute)
+                                                "front" -> pagerScope.launch {
+                                                    runCatching { FavoriteStickers.moveToFront(graph, listOf(sticker.assetId)) }
+                                                        .onFailure { toast(context, stickerErrorText(it)) }
+                                                }
+                                                "delete" -> pagerScope.launch {
+                                                    runCatching { FavoriteStickers.delete(graph, listOf(sticker.assetId)) }
+                                                        .onSuccess { toast(context, "已删除") }
+                                                        .onFailure { toast(context, stickerErrorText(it)) }
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
@@ -651,13 +646,93 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
 
 private class Tool(val key: String, val label: String, val icon: ImageVector, val color: Color)
 
-/** 「+」一次最多选几张 */
-private const val STICKER_PICK_MAX = 20
-
-/** 收藏表情走消息图片上传（3MB，服务端 MAX_IMAGE_UPLOAD_BYTES）：静态图本地会压，动图不压（压了就不动了），超了先挡掉 */
-private fun checkStickerSource(context: android.content.Context, uri: android.net.Uri) {
-    val resolver = context.contentResolver
-    if (resolver.getType(uri) != "image/gif") return
-    val size = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }?.takeIf { it > 0 } ?: return
-    if (size > 3L * 1024 * 1024) error("动图超过 3MB")
+/** 表情面板「收藏」页的一格：点一下发出，长按弹出小菜单（[menu] 画在这一格上方） */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun StickerCell(sticker: FavoriteSticker, menuOpen: Boolean, onClick: () -> Unit, onLongClick: () -> Unit, menu: @Composable () -> Unit) {
+    val colors = KcTheme.colors
+    val press = rememberInteraction()
+    val view = androidx.compose.ui.platform.LocalView.current
+    Box(
+        Modifier.padding(4.dp).size(76.dp).pressScale(press, 0.92f).clip(RoundedCornerShape(8.dp))
+            .background(if (menuOpen) colors.text.copy(alpha = 0.06f) else Color.Transparent)
+            .combinedClickable(
+                interactionSource = press,
+                indication = null,
+                onLongClick = { ink.kuke.chat.ui.components.Haptics.tick(view); onLongClick() },
+                onClick = onClick,
+            ),
+    ) {
+        AsyncImage(
+            model = Meta.imageUrl(sticker.url),
+            contentDescription = "收藏表情",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (menuOpen) menu()
+    }
 }
+
+/**
+ * 长按收藏表情的小菜单：浮在这一格上方（上面放不下就放下面），样式同长按消息的操作宫格（浮起的白面、图标在上文字在下）。
+ * 移到最前（已经是第一个时不出现）· 整理表情（进管理页）· 删除。点外面 / 返回关闭
+ */
+@Composable
+private fun StickerMenu(first: Boolean, onDismiss: () -> Unit, onAction: (String) -> Unit) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    val gap = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val actions = buildList {
+        if (!first) add(MessageAction("front", "移到最前", KcIcons.arrowUp))
+        add(MessageAction("manage", "整理表情", KcIcons.layoutGrid))
+        add(MessageAction("delete", "删除", KcIcons.trash, danger = true))
+    }
+    val appear = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, androidx.compose.animation.core.tween(160, easing = ink.kuke.chat.ui.components.EaseSmooth)) }
+    androidx.compose.ui.window.Popup(
+        popupPositionProvider = remember(gap) { AboveAnchor(gap) },
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+    ) {
+        Row(
+            Modifier
+                .graphicsLayer { alpha = appear.value; val sc = 0.9f + 0.1f * appear.value; scaleX = sc; scaleY = sc }
+                .padding(8.dp)
+                .shadow(8.dp, RoundedCornerShape(16.dp))
+                .background(colors.raised, RoundedCornerShape(16.dp))
+                .padding(6.dp),
+        ) {
+            actions.forEach { action ->
+                val tint = if (action.danger) colors.danger else colors.text
+                Column(
+                    Modifier.width(64.dp).clip(RoundedCornerShape(12.dp)).clickable { onAction(action.key) }.padding(top = 10.dp, bottom = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    KcIcon(action.icon, tint = tint, size = 20.dp)
+                    Text(action.label, style = type.caption.copy(fontWeight = FontWeight.W600), color = tint, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+/** 弹出层放在锚点正上方居中，左右不出屏；上面放不下就放到下面。弹出层四周有 8dp 留给阴影的外边距，[gap] 从里面扣，卡片离格子约 4dp */
+private class AboveAnchor(private val gap: Int) : androidx.compose.ui.window.PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: androidx.compose.ui.unit.IntRect,
+        windowSize: androidx.compose.ui.unit.IntSize,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        popupContentSize: androidx.compose.ui.unit.IntSize,
+    ): androidx.compose.ui.unit.IntOffset {
+        val x = (anchorBounds.center.x - popupContentSize.width / 2).coerceIn(0, maxOf(0, windowSize.width - popupContentSize.width))
+        val above = anchorBounds.top - popupContentSize.height + gap
+        val y = if (above >= 0) above else anchorBounds.bottom - gap
+        return androidx.compose.ui.unit.IntOffset(x, y)
+    }
+}
+
+/** 收藏表情操作失败的提示：列表在别处变过（409）单独说 */
+internal fun stickerErrorText(error: Throwable): String =
+    if ((error as? ink.kuke.chat.core.net.ApiException)?.code == FavoriteStickers.ORDER_MISMATCH) "表情列表有变化，已刷新，请重新操作"
+    else error.userMessage()

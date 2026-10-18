@@ -157,15 +157,19 @@ object GroupEmojis {
         return sorted
     }
 
-    /** 选一张本地图片上传到消息图片通道，返回地址。≤1MB 的原样传（保留 GIF 动图），超了缩到 320px 再压 */
+    /**
+     * 选一张本地图片上传到消息图片通道，返回地址。≤1MB 的原样传（保留动图），超了缩到 320px 再压。
+     * 动图按文件头认（叫 .jpg 的 GIF / 动态 WebP / APNG 也算），带上真实格式；动图超过 1MB 报错，不压成静态图
+     */
     suspend fun uploadLocal(graph: AppGraph, context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
-        val mime = resolver.getType(uri) ?: "image/png"
         val raw = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读不到这张图片")
+        val animated = ink.kuke.chat.feature.chat.AnimatedImages.detect(raw)
+        val mime = animated?.mime ?: resolver.getType(uri) ?: "image/png"
         val (bytes, type, ext) = if (raw.size <= MAX_BYTES && mime in setOf("image/png", "image/jpeg", "image/webp", "image/gif")) {
-            Triple(raw, mime, mime.substringAfter('/').replace("jpeg", "jpg"))
+            Triple(raw, mime, animated?.ext ?: mime.substringAfter('/').replace("jpeg", "jpg"))
         } else {
-            if (mime == "image/gif") error("动图不能超过 1MB")
+            if (animated != null) error("动图不能超过 1MB")
             val decoded = BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: error("这不是一张能识别的图片")
             val scale = minOf(1f, 320f / maxOf(decoded.width, decoded.height))
             val bitmap = if (scale < 1f) Bitmap.createScaledBitmap(decoded, (decoded.width * scale).toInt().coerceAtLeast(1), (decoded.height * scale).toInt().coerceAtLeast(1), true) else decoded

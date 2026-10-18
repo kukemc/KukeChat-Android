@@ -328,16 +328,21 @@ internal class ChatEntry(val message: Message, val pending: PendingMessage?)
 /** 随机 client_nonce：32 位十六进制（后端只收 [A-Za-z0-9_-]，1–64 位） */
 internal fun newClientNonce(): String = java.util.UUID.randomUUID().toString().replace("-", "")
 
-private const val MAX_IMAGE_BYTES = 3 * 1024 * 1024
+private const val MAX_IMAGE_BYTES = AnimatedImages.MAX_BYTES
 private const val MAX_EDGE = 2560
 
-/** 读出图片、压到服务端的上限以内（3MB、1200 万像素），GIF 原样上传；返回图片地址。[onProgress] 报上传进度 */
+/**
+ * 读出图片、压到服务端的上限以内（3MB、1200 万像素）；返回图片地址。[onProgress] 报上传进度。
+ * 动图（GIF / 动态 WebP / APNG，按文件头认，见 AnimatedImages）原样上传、带上真实格式（服务端把 WebP / APNG 转成 GIF）；
+ * 动图超过 3MB 直接报错——压成 JPEG 就不动了，不能悄悄发一张静态图出去
+ */
 internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: Uri, onProgress: ((Float) -> Unit)? = null): String = withContext(Dispatchers.IO) {
     val resolver = context.contentResolver
-    val mime = resolver.getType(uri) ?: "image/jpeg"
     val raw = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读不到这张图片")
-    val (bytes, type, ext) = if (mime == "image/gif" && raw.size <= MAX_IMAGE_BYTES) {
-        Triple(raw, "image/gif", "gif")
+    val animated = AnimatedImages.detect(raw)
+    if (animated != null && raw.size > MAX_IMAGE_BYTES) error(AnimatedImages.TOO_LARGE)
+    val (bytes, type, ext) = if (animated != null) {
+        Triple(raw, animated.mime, animated.ext)
     } else {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)

@@ -678,7 +678,8 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     }
 
     fun addToStickers(url: String) = action {
-        graph.api.post("/stickers/favorites", buildJsonObject { put("source_url", url) })
+        // 同时刷新表情面板里的收藏列表（新加的排在最前）
+        FavoriteStickers.add(graph, url)
         notice.value = "已添加到表情"
     }
 
