@@ -93,7 +93,6 @@ import ink.kuke.chat.ui.theme.KcTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 import java.time.Duration
 import java.time.Instant
 
@@ -1094,21 +1093,8 @@ private fun FileActionSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val api = remember(graph) { GroupPlusApi(graph) }
-    var working by remember { mutableStateOf<Float?>(null) }
-    val path = file.downloadPath ?: "/api/v1/conversations/$conversationId/files/${file.id}/download"
 
-    fun download(then: (File) -> Unit) {
-        if (working != null) return
-        working = 0f
-        scope.launch {
-            runCatching { downloadGroupFile(graph, context, path, file.id, file.name) { working = it } }
-                .onSuccess { then(it) }
-                .onFailure { toast(context, it.userMessage()) }
-            working = null
-        }
-    }
-
-    KcSheet(onDismiss = { if (working == null) onDismiss() }, title = file.name) {
+    KcSheet(onDismiss = onDismiss, title = file.name) {
         Text(
             "${file.uploader?.displayName ?: "已注销用户"} · ${formatBytes(file.size)} · ${fullTime(file.createdAt)}",
             style = type.caption, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 4.dp),
@@ -1117,20 +1103,8 @@ private fun FileActionSheet(
             if (file.permanent) "永久保存" else if (file.expired) "已过期" else "${expiryText(file)}（${fullTime(file.expiresAt)} 到期）",
             style = type.caption, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp),
         )
-        working?.let { ratio ->
-            Text(if (ratio >= 0f) "正在下载 ${(ratio * 100).toInt()}%" else "正在下载…", style = type.secondary, color = colors.accent, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-        }
         if (!file.expired) {
-            SheetRow("打开", { download { f -> if (!openDownloaded(context, f, file.name)) toast(context, "没有能打开这个文件的应用，试试「保存到下载」") ; onDismiss() } }, icon = KcIcons.external)
-            SheetRow("保存到下载", {
-                download { f ->
-                    scope.launch {
-                        val ok = saveToDownloads(context, f, file.name)
-                        toast(context, if (ok) "已保存到 下载/KukeChat" else "当前系统版本不支持直接保存，请用「打开」")
-                        onDismiss()
-                    }
-                }
-            }, icon = KcIcons.download)
+            FileDownloadRows(graph, conversationId, file.id, file.name, file.size, file.contentType, onDismiss)
         }
         if (canManage) {
             SheetRow(
@@ -1148,53 +1122,31 @@ private fun FileActionSheet(
                 icon = KcIcons.clock,
             )
         }
-        if (onMove != null) SheetRow("移动到…", { if (working == null) onMove() }, icon = KcIcons.folder, detail = file.folderName ?: "根目录")
+        if (onMove != null) SheetRow("移动到…", onMove, icon = KcIcons.folder, detail = file.folderName ?: "根目录")
         if (canManage || isUploader) SheetRow("删除", onDelete, icon = KcIcons.trash, danger = true)
         Box(Modifier.height(8.dp))
     }
 }
 
-/** 聊天里文件消息卡片点开用：不需要整个列表，直接给下载 / 保存操作 */
+/** 聊天里文件消息卡片点开用：不需要整个列表，直接给下载 / 保存操作。视频直接进播放页，不弹面板 */
 @Composable
-fun FileMessageSheet(graph: AppGraph, conversationId: Long, fileId: Long, name: String, size: Long, expired: Boolean, onDismiss: () -> Unit) {
+fun FileMessageSheet(graph: AppGraph, conversationId: Long, fileId: Long, name: String, size: Long, expired: Boolean, contentType: String? = null, onDismiss: () -> Unit) {
     val colors = KcTheme.colors
     val type = KcTheme.type
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var working by remember { mutableStateOf<Float?>(null) }
-    val path = "/api/v1/conversations/$conversationId/files/$fileId/download"
-
-    fun download(then: (File) -> Unit) {
-        if (working != null) return
-        working = 0f
-        scope.launch {
-            runCatching { downloadGroupFile(graph, context, path, fileId, name) { working = it } }
-                .onSuccess { then(it) }
-                .onFailure { toast(context, it.userMessage()) }
-            working = null
+    if (!expired && isVideoFile(name, contentType)) {
+        LaunchedEffect(fileId) {
+            VideoPlayerActivity.open(context, conversationId, fileId, name, size)
+            onDismiss()
         }
+        return
     }
-
-    KcSheet(onDismiss = { if (working == null) onDismiss() }, title = name) {
+    KcSheet(onDismiss = onDismiss, title = name) {
         Text(
             if (expired) "文件已过期" else formatBytes(size),
             style = type.caption, color = if (expired) colors.warn else colors.muted, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp),
         )
-        working?.let { ratio ->
-            Text(if (ratio >= 0f) "正在下载 ${(ratio * 100).toInt()}%" else "正在下载…", style = type.secondary, color = colors.accent, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-        }
-        if (!expired) {
-            SheetRow("打开", { download { f -> if (!openDownloaded(context, f, name)) toast(context, "没有能打开这个文件的应用，试试「保存到下载」"); onDismiss() } }, icon = KcIcons.external)
-            SheetRow("保存到下载", {
-                download { f ->
-                    scope.launch {
-                        val ok = saveToDownloads(context, f, name)
-                        toast(context, if (ok) "已保存到 下载/KukeChat" else "当前系统版本不支持直接保存，请用「打开」")
-                        onDismiss()
-                    }
-                }
-            }, icon = KcIcons.download)
-        }
+        if (!expired) FileDownloadRows(graph, conversationId, fileId, name, size, contentType, onDismiss)
         Box(Modifier.height(8.dp))
     }
 }

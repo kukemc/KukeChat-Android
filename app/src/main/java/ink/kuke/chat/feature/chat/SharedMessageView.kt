@@ -92,7 +92,7 @@ fun ReadOnlyMessageHost(graph: AppGraph?, content: @Composable (ReadOnlyActions)
         file?.let { message ->
             val meta = fileMetaOf(message)
             if (graph != null && meta != null) {
-                FileMessageSheet(graph, message.conversationId, meta.id, meta.name, meta.size, meta.isExpired(), onDismiss = { file = null })
+                FileMessageSheet(graph, message.conversationId, meta.id, meta.name, meta.size, meta.isExpired(), meta.contentType, onDismiss = { file = null })
             } else {
                 file = null
             }

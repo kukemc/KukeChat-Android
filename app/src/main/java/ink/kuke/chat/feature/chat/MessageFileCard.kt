@@ -12,18 +12,26 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ink.kuke.chat.core.model.Message
 import ink.kuke.chat.core.ui.parseInstant
+import ink.kuke.chat.feature.groupfiles.FileDownload
+import ink.kuke.chat.feature.groupfiles.FileDownloads
+import ink.kuke.chat.feature.groupfiles.KcProgressBar
 import ink.kuke.chat.feature.groupfiles.fileIcon
+import ink.kuke.chat.feature.groupfiles.isVideoFile
+import ink.kuke.chat.feature.groupfiles.ratio
 import ink.kuke.chat.feature.groupplus.formatBytes
 import ink.kuke.chat.ui.icons.KcIcon
+import ink.kuke.chat.ui.icons.KcIcons
 import ink.kuke.chat.ui.theme.KcTheme
 import java.time.Instant
 
@@ -62,13 +70,17 @@ fun fileMetaOf(message: Message): FileMeta? {
     )
 }
 
-/** 群文件消息的卡片：图标 · 文件名 · 大小 · 有效期。点开走下载面板 */
+/** 群文件消息的卡片：图标 · 文件名 · 大小 · 有效期。点开走下载面板（视频直接进播放页）；在下载时底部画进度条 */
 @Composable
 internal fun MessageFileCard(meta: FileMeta, onClick: () -> Unit) {
     val colors = KcTheme.colors
     val type = KcTheme.type
+    val context = LocalContext.current
     val expired = meta.isExpired()
-    Row(
+    val video = isVideoFile(meta.name, meta.contentType)
+    LaunchedEffect(meta.id) { FileDownloads.refresh(context, meta.id) }
+    val download = FileDownloads.states[meta.id]
+    Column(
         Modifier
             .widthIn(min = 220.dp, max = 270.dp)
             .shadow(1.dp, RoundedCornerShape(12.dp))
@@ -77,21 +89,31 @@ internal fun MessageFileCard(meta: FileMeta, onClick: () -> Unit) {
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(colors.accentSoft), contentAlignment = Alignment.Center) {
-            KcIcon(fileIcon(meta.name, meta.contentType), tint = if (expired) colors.subtle else colors.accent, size = 22.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(if (video && !expired) colors.fill else colors.accentSoft), contentAlignment = Alignment.Center) {
+                if (video && !expired) {
+                    KcIcon(KcIcons.play, tint = colors.onFill, size = 20.dp)
+                } else {
+                    KcIcon(fileIcon(meta.name, meta.contentType), tint = if (expired) colors.subtle else colors.accent, size = 22.dp)
+                }
+            }
+            Column(Modifier.padding(start = 10.dp)) {
+                Text(meta.name, style = type.rowTitle, color = if (expired) colors.subtle else colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    formatBytes(meta.size) + " · " + when {
+                        expired -> "已过期"
+                        download is FileDownload.Running -> download.ratio(meta.size)?.let { "下载中 ${(it * 100).toInt()}%" } ?: "下载中"
+                        download is FileDownload.Done -> "已下载"
+                        meta.permanent -> "永久"
+                        else -> "限时保留"
+                    },
+                    style = type.caption, color = if (expired) colors.warn else colors.muted,
+                )
+            }
         }
-        Column(Modifier.padding(start = 10.dp)) {
-            Text(meta.name, style = type.rowTitle, color = if (expired) colors.subtle else colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                formatBytes(meta.size) + " · " + when {
-                    expired -> "已过期"
-                    meta.permanent -> "永久"
-                    else -> "限时保留"
-                },
-                style = type.caption, color = if (expired) colors.warn else colors.muted,
-            )
+        if (download is FileDownload.Running && !expired) {
+            KcProgressBar(download.ratio(meta.size), Modifier.padding(top = 10.dp), height = 3.dp)
         }
     }
 }

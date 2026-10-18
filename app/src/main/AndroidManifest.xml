@@ -53,6 +53,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 群文件视频播放页：横屏全屏时不重建（播放器不中断） -->
+        <activity
+            android:name=".feature.groupfiles.VideoPlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:theme="@style/Theme.KukeChat.Player" />
+
         <!-- remoteMessaging：即时通讯用的前台服务类型，不受 Android 15 对 dataSync 的每天 6 小时限制 -->
         <service
             android:name=".service.RealtimeService"

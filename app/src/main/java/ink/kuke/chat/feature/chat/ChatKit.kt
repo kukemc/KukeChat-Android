@@ -4,7 +4,15 @@ import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -89,6 +97,10 @@ internal fun KcSheet(
     val appear = remember { Animatable(0f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, tween(240, easing = EaseSmooth)) }
     BackHandler(onBack = onDismiss)
+    // 下滑关闭：拖过 96dp 或甩得够快就关，否则弹回。面板里自己能滚的内容先吃掉手势，拖把手 / 标题区域总能关
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val dismissPx = with(LocalDensity.current) { 96.dp.toPx() }
+    val dragState = rememberDraggableState { delta -> dragY = (dragY + delta).coerceAtLeast(0f) }
     Box(
         Modifier
             .fillMaxSize()
@@ -100,12 +112,21 @@ internal fun KcSheet(
         Column(
             Modifier
                 .fillMaxWidth()
-                .graphicsLayer { translationY = (1f - appear.value) * 220.dp.toPx() }
+                .graphicsLayer { translationY = (1f - appear.value) * 220.dp.toPx() + dragY }
                 .imePadding()
                 .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                 .background(colors.panel)
                 // 拦住点击：点面板本身不关闭
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Vertical,
+                    onDragStopped = { velocity ->
+                        if (dragY > dismissPx || velocity > 1800f) onDismiss()
+                        // 调用方不让关（或关闭还没生效）时弹回原位
+                        animate(dragY, 0f, animationSpec = tween(180, easing = EaseSmooth)) { value, _ -> dragY = value }
+                    },
+                )
                 .navigationBarsPadding()
                 .heightIn(max = maxHeight),
         ) {

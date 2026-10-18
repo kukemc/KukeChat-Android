@@ -116,5 +116,8 @@ dependencies {
     implementation(libs.coil.gif)
     // 底栏毛玻璃：取背后的页面内容做模糊（Android 12+ 真模糊，更早的系统退回半透明底色）
     implementation(libs.haze)
+    // 群文件里的视频：应用内流式播放（ExoPlayer + 自带的播放控制条）
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
     testImplementation(libs.junit)
 }

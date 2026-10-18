@@ -6,6 +6,11 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
+    <!-- 视频播放页：纯黑底 -->
+    <style name="Theme.KukeChat.Player" parent="Theme.KukeChat">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
     <!-- 启动画面（读登录状态的那一瞬间），之后换成上面的主题 -->
     <style name="Theme.KukeChat.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/kc_list</item>

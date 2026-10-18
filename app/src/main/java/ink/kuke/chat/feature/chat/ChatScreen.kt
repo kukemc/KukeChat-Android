@@ -475,7 +475,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     Row(
                         Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 10.dp, end = 10.dp).fillMaxWidth().height(40.dp)
                             .shadow(3.dp, RoundedCornerShape(12.dp)).clip(RoundedCornerShape(12.dp)).background(colors.panel)
-                            .clickable { nav.go(GroupInfoRoute(conversationId)) }.padding(start = 12.dp, end = 6.dp),
+                            .clickable { nav.go(ink.kuke.chat.ui.shell.GroupAnnouncementsRoute(conversationId)) }.padding(start = 12.dp, end = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         KcIcon(KcIcons.announcement, tint = colors.accent, size = 16.dp)
@@ -750,6 +750,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 is Overlay.Report -> ReportSheet(controller, current.target, onDismiss = close)
             }
         }
+        // 群公告：进群弹窗（逐条；需确认的点「确认收到」）
+        ink.kuke.chat.feature.groupannouncement.AnnouncementPopupHost(graph, conversationId, enabled = isGroup)
         GiftStageFullscreen(giftStage)
         viewing?.let { ImageViewer(it) { viewing = null } }
         // 文件卡片的保留状态以群文件列表为准（转永久后快照里的 expires_at 会让卡片误报「已过期」）
@@ -769,7 +771,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         openFile?.let { message ->
             val meta = fileMetaOf(message)
             if (meta != null) {
-                ink.kuke.chat.feature.groupfiles.FileMessageSheet(graph, conversationId, meta.id, meta.name, meta.size, meta.isExpired(), onDismiss = { openFile = null })
+                ink.kuke.chat.feature.groupfiles.FileMessageSheet(graph, conversationId, meta.id, meta.name, meta.size, meta.isExpired(), meta.contentType, onDismiss = { openFile = null })
             } else {
                 openFile = null
             }
