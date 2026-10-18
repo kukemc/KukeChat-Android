@@ -463,13 +463,23 @@ private fun EmojiPanel(
     val nav = ink.kuke.chat.ui.shell.LocalAppNav.current
     // 收藏表情：和管理页共用 FavoriteStickers 的列表（先显示上次的，第一次翻到收藏页时重拉一次）
     val stickers = FavoriteStickers.items
-    var stickersRefreshed by remember { mutableStateOf(false) }
+    // 第几次加载 / 上次加载完的是第几次：点重试就加一。不能在 LaunchedEffect 里改它自己的 key，
+    // 否则刚发出去的请求会被立刻取消，取消又被当成失败（2.0.7 收藏页一直「没加载出来」就是这样）
+    var stickersAttempt by remember { mutableIntStateOf(0) }
+    var stickersLoadedAttempt by remember { mutableIntStateOf(-1) }
     var stickersFailed by remember { mutableStateOf(false) }
-    LaunchedEffect(tab, stickersRefreshed) {
-        if (tab == 2 && !stickersRefreshed) {
-            stickersRefreshed = true
+    val onStickerTab = tab == 2
+    LaunchedEffect(onStickerTab, stickersAttempt) {
+        if (onStickerTab && stickersLoadedAttempt != stickersAttempt) {
             stickersFailed = false
-            runCatching { FavoriteStickers.load(graph) }.onFailure { stickersFailed = true }
+            try {
+                FavoriteStickers.load(graph)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stickersFailed = true
+            }
+            stickersLoadedAttempt = stickersAttempt
         }
     }
     /** 长按弹出小菜单的那个收藏表情 */
@@ -501,7 +511,7 @@ private fun EmojiPanel(
                 2 -> {
                     val list = stickers
                     when {
-                        list == null && stickersFailed -> StateText("收藏表情没加载出来", error = true, onRetry = { stickersRefreshed = false })
+                        list == null && stickersFailed -> StateText("收藏表情没加载出来", error = true, onRetry = { stickersAttempt++ })
                         list == null -> Text("加载中…", style = type.caption, color = colors.muted, modifier = Modifier.padding(16.dp))
                         else -> LazyVerticalGrid(GridCells.Fixed(4), Modifier.fillMaxSize().padding(8.dp)) {
                             // 「+」进收藏表情管理页：在那里添加、多选删除、拖动排序

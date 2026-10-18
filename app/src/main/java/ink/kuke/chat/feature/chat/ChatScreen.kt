@@ -208,6 +208,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     var flash by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var flashSeq by remember { mutableIntStateOf(0) }
     var jumpJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // 定位中：列表整段换过、或者目标不在屏幕上时，scrollToItem → 量高度 → 居中这几帧画面会来回跳（看着像闪了一下），
+    // 这期间把列表藏起来，摆好了再淡入
+    var positioning by remember { mutableStateOf(false) }
     fun jumpTo(messageId: Long) {
         jumpJob?.cancel()
         jumpJob = scope.launch {
@@ -218,7 +221,16 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     if (problem.isNotBlank()) toast(context, problem)
                     return@launch
                 }
-                if (listState.centerOn(messages, messageId)) {
+                // 跳转后可能刚进上下文模式（不显示本地消息）：按跳完的状态算，别用组合时抓到的 pendingShown
+                val leading = if (controller.inContext) 0 else pendingItems.size
+                val smooth = listState.isShowing(messages, messageId, leading)
+                if (!smooth) positioning = true
+                val centered = try {
+                    listState.centerOn(messages, messageId, leading, smooth)
+                } finally {
+                    positioning = false
+                }
+                if (centered) {
                     val token = ++flashSeq
                     flash = messageId to token
                     // 闪完就清掉：不然这条滑出去再滑回来（重新进组合）会再闪一次
@@ -228,7 +240,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     }
                     // 目标附近的图片陆续加载会把它挤走：稍后再对一次中（用户已经在滑就不管了）
                     kotlinx.coroutines.delay(450)
-                    if (!listState.isScrollInProgress) listState.centerOn(messages, messageId)
+                    if (!listState.isScrollInProgress) listState.centerOn(messages, messageId, if (controller.inContext) 0 else pendingItems.size, smooth = true)
                 }
             } finally {
                 jumping = false
@@ -463,10 +475,15 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 // 倒排（最新在前）：本地消息（发送中 / 失败）排在所有服务端消息之后。
                 // key：本地那条是 "n:nonce"，换成服务端消息后沿用同一个 key（outbox.keyOf），原地替换不闪不跳
                 val reversed = pendingShown.asReversed().map { ChatEntry(it.preview, it) } + messages.asReversed().map { ChatEntry(it, null) }
+                val listAlpha by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (positioning) 0f else 1f,
+                    animationSpec = androidx.compose.animation.core.tween(if (positioning) 0 else 140),
+                    label = "jumpFade",
+                )
                 LazyColumn(
                     state = listState,
                     reverseLayout = true,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = listAlpha },
                     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 16.dp),
                     // 设计稿 .msgs：消息之间 14dp
                     verticalArrangement = Arrangement.spacedBy(14.dp),

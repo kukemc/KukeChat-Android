@@ -8,6 +8,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -48,24 +49,38 @@ internal data class ListProbe(val last: Int, val first: Int, val jumping: Boolea
 
 /**
  * 把一条消息滚到视口中间（聊天列表是 reverseLayout，最新在 index 0、贴底）。
- * 先 scrollToItem 让它贴在底部内边距上，量出它的高度，再往回滚 (视口 - 高度) / 2；比视口还高就让它的顶边对齐视口顶。
+ * [leading]：列表里排在服务端消息前面的项数（发送中 / 失败的本地消息），下标要加上它。
+ * 目标已经在屏幕上（[smooth]）就直接平滑滚过去；不在就先 scrollToItem 让它贴在底部内边距上，量出高度，
+ * 再往回滚 (视口 - 高度) / 2，比视口还高就让它的顶边对齐视口顶 —— 这几步中间的画面会跳，调用方要在这期间把列表藏起来。
  * 返回目标在不在列表里。
  */
-internal suspend fun LazyListState.centerOn(messages: List<Message>, messageId: Long): Boolean {
+internal suspend fun LazyListState.centerOn(messages: List<Message>, messageId: Long, leading: Int = 0, smooth: Boolean = false): Boolean {
     // 列表刚整段换过：等它重组完再算下标、量尺寸
-    repeat(2) { withFrameNanos { } }
-    val index = messages.asReversed().indexOfFirst { it.id == messageId }
-    if (index < 0) return false
-    scrollToItem(index)
-    withFrameNanos { }
+    if (!smooth) repeat(2) { withFrameNanos { } }
+    val found = messages.asReversed().indexOfFirst { it.id == messageId }
+    if (found < 0) return false
+    val index = found + leading
+    if (layoutInfo.visibleItemsInfo.none { it.index == index }) {
+        scrollToItem(index)
+        withFrameNanos { }
+    }
     val info = layoutInfo
     val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return true
     val viewport = info.viewportSize.height
     val wanted = if (item.size >= viewport) viewport - item.size else (viewport - item.size) / 2
-    val delta = wanted - info.beforeContentPadding
+    // 倒排：item.offset 是它的底边离视口底（含内边距）的距离，挪到 wanted 要往回滚的量
+    val delta = wanted - (item.offset + info.beforeContentPadding)
     // 倒排列表里往回滚（负值）= 内容往上走；最新的几条下面没东西可滚，自然停在能到的位置
-    if (delta != 0) scrollBy(-delta.toFloat())
+    if (delta != 0) {
+        if (smooth) animateScrollBy(-delta.toFloat()) else scrollBy(-delta.toFloat())
+    }
     return true
+}
+
+/** 这条消息现在在不在屏幕上（[leading] 同 centerOn） */
+internal fun LazyListState.isShowing(messages: List<Message>, messageId: Long, leading: Int = 0): Boolean {
+    val found = messages.asReversed().indexOfFirst { it.id == messageId }
+    return found >= 0 && layoutInfo.visibleItemsInfo.any { it.index == found + leading }
 }
 
 /** 墨色胶囊（深色主题反转成浅色）：浮在消息区上的小按钮 */

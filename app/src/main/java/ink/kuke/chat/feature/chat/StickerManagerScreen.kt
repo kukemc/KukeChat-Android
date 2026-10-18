@@ -90,7 +90,13 @@ fun StickerManagerScreen(graph: AppGraph) {
     var reloads by remember { mutableStateOf(0) }
     LaunchedEffect(reloads) {
         failed = false
-        runCatching { FavoriteStickers.load(graph) }.onFailure { failed = true }
+        try {
+            FavoriteStickers.load(graph)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed = true
+        }
     }
 
     var selecting by remember { mutableStateOf(false) }
