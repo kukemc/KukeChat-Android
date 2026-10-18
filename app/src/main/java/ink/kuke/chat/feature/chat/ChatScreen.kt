@@ -165,6 +165,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         controller.start()
         onDispose {
             controller.stop()
+            // 离开会话：正在放的语音一起停掉（不然退出聊天还在响）
+            VoicePlayer.stop()
             if (graph.conversations.visibleConversationId == conversationId) graph.conversations.visibleConversationId = null
         }
     }
