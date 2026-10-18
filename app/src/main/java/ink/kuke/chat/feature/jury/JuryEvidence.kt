@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -144,18 +145,22 @@ private fun MessageBody(message: CaseMessage, bold: Boolean = false, onOpenImage
 @Composable
 private fun EvidenceVoice(key: String, url: String) {
     val colors = KcTheme.colors
-    val playing = VoicePlayer.playingId == key
+    // 当前这条（在放或暂停着）/ 正在出声：点圆键暂停后再点接着放
+    val current = VoicePlayer.playingId == key
+    val playing = VoicePlayer.isPlaying(key)
     // 放过一次就记住总时长，停了以后还能显示
     var knownMs by remember(key) { mutableLongStateOf(0L) }
-    LaunchedEffect(playing, VoicePlayer.durationMs) {
-        if (playing && VoicePlayer.durationMs > 0) knownMs = VoicePlayer.durationMs
+    LaunchedEffect(current, VoicePlayer.durationMs) {
+        if (current && VoicePlayer.durationMs > 0) knownMs = VoicePlayer.durationMs
     }
     val elapsedSec by remember(key) {
-        derivedStateOf { if (VoicePlayer.playingId == key) (VoicePlayer.progress * VoicePlayer.durationMs / 1000f).toLong() else 0L }
+        derivedStateOf { if (VoicePlayer.playingId == key) VoicePlayer.positionMs / 1000 else 0L }
     }
     DisposableEffect(key) {
         onDispose { if (VoicePlayer.playingId == key) VoicePlayer.stop() }
     }
+    // 正在拖的位置（0–1）
+    var scrub by remember(key) { mutableStateOf<Float?>(null) }
     val button = colors.fill
     val glyph = colors.onFill
     val track = colors.text.copy(alpha = 0.14f)
@@ -181,24 +186,40 @@ private fun EvidenceVoice(key: String, url: String) {
                 drawPath(tri, glyph)
             }
         }
-        // 进度条：点哪里就从哪里放
+        // 进度条：点哪里就从哪里放；横着拖 = 拖进度（拖的时候进度和时间跟着手指，松手才真的跳）
         Canvas(
             Modifier.weight(1f).padding(horizontal = 10.dp).height(24.dp)
                 .pointerInput(key, url) {
                     detectTapGestures { offset -> VoicePlayer.seek(key, url, offset.x / size.width.coerceAtLeast(1)) }
+                }
+                .pointerInput(key, url) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { offset -> scrub = (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                        onDragEnd = { scrub?.let { VoicePlayer.seek(key, url, it) }; scrub = null },
+                        onDragCancel = { scrub = null },
+                    ) { change, _ ->
+                        change.consume()
+                        scrub = (change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    }
                 },
         ) {
             val h = 4.dp.toPx()
             val top = (size.height - h) / 2f
             drawRoundRect(track, Offset(0f, top), Size(size.width, h), CornerRadius(h / 2f))
             // 只在画的时候读进度：进度每帧变，也只重画这块画布
-            val progress = if (VoicePlayer.playingId == key) VoicePlayer.progress else 0f
+            val progress = scrub ?: if (VoicePlayer.playingId == key) VoicePlayer.progress else 0f
             if (progress > 0f) drawRoundRect(button, Offset(0f, top), Size(size.width * progress, h), CornerRadius(h / 2f))
+            // 在放 / 暂停 / 拖动时画一个小圆点当把手
+            if (scrub != null || VoicePlayer.playingId == key) drawCircle(button, 5.dp.toPx(), Offset((size.width * progress).coerceIn(5.dp.toPx(), size.width - 5.dp.toPx()), size.height / 2f))
         }
         Text(
             when {
-                playing && VoicePlayer.durationMs > 0 -> "${clock(elapsedSec)} / ${clock(VoicePlayer.durationMs / 1000)}"
-                playing -> "加载中…"
+                scrub != null && (current && VoicePlayer.durationMs > 0 || knownMs > 0) -> {
+                    val total = if (current && VoicePlayer.durationMs > 0) VoicePlayer.durationMs else knownMs
+                    "${clock((total * (scrub ?: 0f) / 1000f).toLong())} / ${clock(total / 1000)}"
+                }
+                current && VoicePlayer.durationMs > 0 -> "${clock(elapsedSec)} / ${clock(VoicePlayer.durationMs / 1000)}"
+                current -> "加载中…"
                 knownMs > 0 -> clock(knownMs / 1000)
                 else -> "语音"
             },

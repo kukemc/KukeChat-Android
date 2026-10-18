@@ -56,6 +56,8 @@ data class Message(
     val featured: Boolean = false,
     /** 发送时带的随机串，POST 返回和 message.created 原样回显（不落库，历史接口里为 null）：乐观发送靠它认领本地那条 */
     @SerialName("client_nonce") val clientNonce: String? = null,
+    /** 语音转出来的文字（有人转过就带上，没转过 / 旧后端为 null）：长按「转文字」直接显示，不再请求 */
+    @SerialName("voice_transcript") val voiceTranscript: String? = null,
 ) {
     val isRecalled: Boolean get() = recalledAt != null
     val senderName: String get() = senderDisplayName?.takeIf { it.isNotBlank() } ?: sender?.displayName ?: "用户 ${senderId ?: 0}"

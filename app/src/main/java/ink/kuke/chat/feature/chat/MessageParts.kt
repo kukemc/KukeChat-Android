@@ -1,9 +1,15 @@
 package ink.kuke.chat.feature.chat
 
-import android.media.MediaPlayer
+import android.content.Context
 import android.view.Choreographer
+import android.widget.Toast
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -81,6 +87,18 @@ object Meta {
 
     fun mentions(message: Message): List<String> =
         (message.metadata?.get("mentions") as? JsonArray)?.mapNotNull { ((it as? JsonObject)?.get("name") as? JsonPrimitive)?.contentOrNull }.orEmpty()
+
+    /**
+     * 这条消息有没有提到我：metadata.mentions 里有我的 user_id → "me"；metadata.mention_all → "all"；都没有 → null。
+     * 自己发的、撤回的不算（聊天页「有人@我」用，同服务端 GET …/mentions/unread 的 kind）
+     */
+    fun mentionKind(message: Message, myId: Long?): String? {
+        if (myId == null || message.senderId == myId || message.isRecalled) return null
+        val meta = message.metadata ?: return null
+        val me = (meta["mentions"] as? JsonArray)?.any { ((it as? JsonObject)?.get("user_id") as? JsonPrimitive)?.longOrNull == myId } == true
+        if (me) return "me"
+        return if ((meta["mention_all"] as? JsonPrimitive)?.booleanOrNull == true) "all" else null
+    }
 
     /** 名片、礼物、红包、投票、合并转发：先统一画成一张卡片（交互在后面几步加） */
     fun card(message: Message): Card? {
@@ -189,89 +207,164 @@ private fun AnnotatedString.Builder.appendMentions(text: String, mentions: List<
 }
 
 /**
- * 语音播放：同一时间只放一条，再点一下停。
- * [progress] 是当前这条的播放进度（0–1），每帧从 MediaPlayer 读一次，气泡里的波形按它从左到右点亮。
- * [playingId] 是正在放的那条的标识：聊天消息用消息 id；没有消息 id 的地方（风纪委员案件证据）自己给一个不会和 id 撞的键。
+ * 语音播放（ExoPlayer）：同一时间只放一条。点一下暂停，再点从暂停的地方接着放；放完自动停下、回到开头。
+ * [playingId] 是当前这条（在放或暂停着）的标识：聊天消息用消息 id；没有消息 id 的地方（风纪委员案件证据）自己给一个不会和 id 撞的键。
+ * [positionMs] 播放中每帧从播放器读一次（ExoPlayer 的位置是按音频时钟插值的，不会一跳一跳），气泡里的波形、剩余时长跟着它走。
+ * 抢走音频焦点（来电、别的应用放歌）或拔耳机时播放器自己暂停，[paused] 跟着变。
  */
 object VoicePlayer {
     var playingId by mutableStateOf<Any?>(null)
         private set
-    var progress by mutableFloatStateOf(0f)
+    /** 当前这条暂停着（还没放完，点一下接着放） */
+    var paused by mutableStateOf(false)
+        private set
+    /** 当前这条放到哪了（毫秒） */
+    var positionMs by mutableLongStateOf(0L)
         private set
     /** 正在放的那条的总时长（毫秒）；准备好之前是 0 */
     var durationMs by mutableLongStateOf(0L)
         private set
-    private var player: MediaPlayer? = null
-    private var prepared = false
-    /** 还没准备好就要求跳的位置（0–1），准备好后先跳再放 */
+    /** 播放进度（0–1） */
+    val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    /** [key] 这条正在出声（不是暂停、也不是别的那条） */
+    fun isPlaying(key: Any): Boolean = playingId == key && !paused
+
+    private var appContext: Context? = null
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private var player: ExoPlayer? = null
+    /** 还没准备好（不知道总时长）就要求跳的位置（0–1），准备好后再跳 */
     private var pendingSeek: Float? = null
 
-    // 播放中每帧刷新进度；停了就不再续约
+    /** 应用启动时调一次（ExoPlayer 要 Context） */
+    fun bind(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    // 播放中每帧刷新位置；暂停、停了就不再续约
     private val frame = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             val p = player ?: return
-            if (prepared) runCatching {
-                val total = p.duration
-                if (total > 0) progress = (p.currentPosition.toFloat() / total).coerceIn(0f, 1f)
-            }
-            Choreographer.getInstance().postFrameCallback(this)
+            readPosition(p)
+            if (!paused) Choreographer.getInstance().postFrameCallback(this)
         }
+    }
+
+    private fun readPosition(p: ExoPlayer) {
+        val total = p.duration
+        if (total != C.TIME_UNSET && total > 0) durationMs = total
+        positionMs = p.currentPosition.coerceIn(0L, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+    }
+
+    private fun tick() {
+        val choreographer = Choreographer.getInstance()
+        choreographer.removeFrameCallback(frame)
+        choreographer.postFrameCallback(frame)
     }
 
     fun toggle(message: Message) = toggle(message.id, message.content)
 
-    /** 播放 / 停止 [key] 对应的语音，[url] 可以是相对地址 */
+    /** [key] 对应的语音：没在放就从头放；在放就暂停；暂停着就接着放。[url] 可以是相对地址 */
     fun toggle(key: Any, url: String?) {
-        if (playingId == key) {
-            stop()
+        if (playingId == key && player != null) {
+            if (paused) resume() else pause()
             return
         }
-        stop()
-        val absolute = Endpoints.absolute(url) ?: return
-        playingId = key
-        progress = 0f
-        player = MediaPlayer().apply {
-            setDataSource(absolute)
-            setOnPreparedListener {
-                prepared = true
-                durationMs = it.duration.toLong().coerceAtLeast(0L)
-                pendingSeek?.let { f -> if (it.duration > 0) it.seekTo((it.duration * f).toInt()) }
-                pendingSeek = null
-                it.start()
-            }
-            setOnCompletionListener {
-                progress = 1f
-                stop()
-            }
-            setOnErrorListener { _, _, _ -> stop(); true }
-            prepareAsync()
-        }
-        Choreographer.getInstance().postFrameCallback(frame)
+        start(key, url, null)
     }
 
-    /** 拖动 / 点按语音条：跳到 [fraction]（0–1）。这一条正在放就直接跳；没在放就从这个位置开始放 */
+    private fun start(key: Any, url: String?, from: Float?) {
+        stop()
+        val absolute = Endpoints.absolute(url) ?: return
+        val context = appContext ?: return
+        playingId = key
+        paused = false
+        positionMs = 0L
+        pendingSeek = from
+        val exo = ExoPlayer.Builder(context)
+            // 语音：拿音频焦点（别的应用的声音暂停），拔耳机自动暂停
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(), true)
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+        player = exo
+        exo.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (player !== exo) return
+                when (state) {
+                    Player.STATE_READY -> {
+                        readPosition(exo)
+                        pendingSeek?.let { f -> if (durationMs > 0) exo.seekTo((durationMs * f).toLong()) }
+                        pendingSeek = null
+                    }
+                    // 放完：停下、回到开头（波形熄掉、时长回到总长）。release 不在播放器自己的回调里做，挪到下一轮消息
+                    Player.STATE_ENDED -> {
+                        paused = false
+                        positionMs = durationMs
+                        main.post { if (player === exo) stop() }
+                    }
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (player !== exo) return
+                paused = !playWhenReady
+                if (playWhenReady) tick() else readPosition(exo)
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (player !== exo) return
+                main.post { if (player === exo) stop() }
+                appContext?.let { Toast.makeText(it, "语音播放失败", Toast.LENGTH_SHORT).show() }
+            }
+        })
+        exo.setMediaItem(MediaItem.fromUri(absolute))
+        exo.playWhenReady = true
+        exo.prepare()
+        tick()
+    }
+
+    fun pause() {
+        val p = player ?: return
+        p.playWhenReady = false
+        paused = true
+        readPosition(p)
+    }
+
+    fun resume() {
+        val p = player ?: return
+        paused = false
+        p.playWhenReady = true
+        tick()
+    }
+
+    /** 拖动 / 点按语音条：跳到 [fraction]（0–1）并接着放。这一条是当前这条就直接跳；不是就从这个位置开始放 */
     fun seek(message: Message, fraction: Float) = seek(message.id, message.content, fraction)
 
     fun seek(key: Any, url: String?, fraction: Float) {
         val f = fraction.coerceIn(0f, 0.999f)
-        if (playingId != key) {
-            toggle(key, url)
-            if (playingId != key) return
+        val p = player
+        if (playingId != key || p == null) {
+            start(key, url, f)
+            return
         }
-        progress = f
-        val p = player ?: return
-        if (prepared) runCatching { if (p.duration > 0) p.seekTo((p.duration * f).toInt()) } else pendingSeek = f
+        if (durationMs > 0) {
+            p.seekTo((durationMs * f).toLong())
+            positionMs = (durationMs * f).toLong()
+        } else {
+            pendingSeek = f
+        }
+        if (paused) resume()
     }
 
     fun stop() {
         Choreographer.getInstance().removeFrameCallback(frame)
         pendingSeek = null
-        runCatching { player?.release() }
+        val p = player
         player = null
-        prepared = false
+        runCatching { p?.release() }
         playingId = null
-        progress = 0f
+        paused = false
+        positionMs = 0L
         durationMs = 0L
     }
 }
-

@@ -18,6 +18,8 @@ class KukeApp : Application(), ImageLoaderFactory {
         super.onCreate()
         graph = AppGraph(this)
         Notifier.ensureChannels(this)
+        // 语音播放器（ExoPlayer）要 Context
+        ink.kuke.chat.feature.chat.VoicePlayer.bind(this)
         // 最近会话发布成直接分享快捷方式（会话列表变了就更新）
         ink.kuke.chat.feature.share.ShareShortcuts.bind(this, graph)
         // 上次进程里分享进来的附件副本：新进程里已经没有任何东西引用它们了（只留刚拷的，防同一进程里正在准备发送的）

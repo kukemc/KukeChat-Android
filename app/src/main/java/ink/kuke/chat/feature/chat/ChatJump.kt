@@ -6,10 +6,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
@@ -34,6 +37,8 @@ import ink.kuke.chat.core.model.Message
 import ink.kuke.chat.ui.components.pressScale
 import ink.kuke.chat.ui.components.rememberInteraction
 import ink.kuke.chat.ui.components.softShadow
+import ink.kuke.chat.ui.icons.KcIcon
+import ink.kuke.chat.ui.icons.KcIcons
 import ink.kuke.chat.ui.theme.KcTheme
 
 /**
@@ -104,31 +109,31 @@ internal fun InkCapsule(modifier: Modifier = Modifier, onClick: () -> Unit, cont
 }
 
 /**
- * 「🧧 N 个红包未领」：这个会话里我还能领的红包。点一下跳到那条红包消息，多个时从最早的开始逐个轮。
- * 领完、过期、被抢完后自动消失（数据见 ChatController.pendingRedPackets；本地缓存里已知领不了的也先摘掉）。
+ * 「🧧 N 个红包未领」：这个会话里我还能领、而且还没看过的红包。点一下跳到最早的那个，跳过去就算看过、数字减一。
+ * 领完、过期、被抢完后自动消失（数据见 ChatController.pendingRedPackets；本地缓存里已知领不了的也先摘掉）；
+ * 「看过」也包括气泡在屏幕上出现过（ChatScreen 里盯着可见项标记，见 SeenMarks），有的红包就是不想领，别一直挂着。
  */
 @Composable
 internal fun PendingRedPacketPill(controller: ChatController, modifier: Modifier = Modifier, onJump: (Long) -> Unit) {
     val colors = KcTheme.colors
     val type = KcTheme.type
+    val seen = SeenMarks.redPackets.value
     val items = controller.pendingRedPackets.filter { pending ->
         val state = controller.redPackets[pending.id]
-        state == null || (state.active && !state.claimedByMe && !state.expiredAt())
+        pending.id !in seen && (state == null || (state.active && !state.claimedByMe && !state.expiredAt()))
     }.sortedWith(compareBy({ it.createdAt }, { it.messageId }))
-    var cursor by remember { mutableIntStateOf(0) }
     // 消失时留住最后的数字，淡出过程中不闪成 0
     var shown by remember { mutableIntStateOf(0) }
     if (items.isNotEmpty()) shown = items.size
     AnimatedVisibility(
         visible = items.isNotEmpty(),
         modifier = modifier,
-        enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)),
-        exit = fadeOut(tween(160)) + scaleOut(tween(180), targetScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)),
+        enter = PillEnter,
+        exit = PillExit,
     ) {
         InkCapsule(onClick = {
-            if (items.isNotEmpty()) {
-                val target = items[cursor % items.size]
-                cursor = (cursor + 1) % items.size
+            items.firstOrNull()?.let { target ->
+                SeenMarks.markRedPackets(listOf(target.id))
                 onJump(target.messageId)
             }
         }) {
@@ -142,3 +147,52 @@ internal fun PendingRedPacketPill(controller: ChatController, modifier: Modifier
         }
     }
 }
+
+/**
+ * 「有人@我」/「N 条@我」：这个会话里提到我（@我、@全体成员）、还没看过的未读消息。点一下跳到最早的那条，再点下一条；
+ * 跳过去或者那条在屏幕上出现过就算看过（SeenMarks.mentions），全看完自动消失。数据见 ChatController.unreadMentions
+ */
+@Composable
+internal fun MentionPill(controller: ChatController, modifier: Modifier = Modifier, onJump: (Long) -> Unit) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    val seen = SeenMarks.mentions.value
+    val items = controller.unreadMentions.filter { it.messageId !in seen }
+    var shown by remember { mutableStateOf("") }
+    if (items.isNotEmpty()) shown = when {
+        items.size > 1 -> "${items.size} 条@我"
+        items.first().kind == "all" -> "@全体成员"
+        else -> "有人@我"
+    }
+    AnimatedVisibility(
+        visible = items.isNotEmpty(),
+        modifier = modifier,
+        enter = PillEnter,
+        exit = PillExit,
+    ) {
+        // 底下留 8dp 给下面的红包胶囊：间距在动画里面，收起时跟着一起收，不会最后跳一下
+        Box(Modifier.padding(bottom = 8.dp)) {
+            InkCapsule(onClick = {
+                items.firstOrNull()?.let { target ->
+                    SeenMarks.markMentions(listOf(target.messageId))
+                    onJump(target.messageId)
+                }
+            }) {
+                KcIcon(KcIcons.atSign, tint = colors.panel, size = 14.dp)
+                Text(
+                    shown,
+                    style = type.caption.copy(fontWeight = FontWeight.W600),
+                    color = colors.panel,
+                    modifier = Modifier.padding(start = 5.dp),
+                )
+            }
+        }
+    }
+}
+
+// 右上角胶囊的进出：从右上角缩放淡入淡出
+// 两个胶囊上下叠着：高度也跟着展开 / 收起，上面那个消失时下面那个平滑顶上去
+private val PillEnter = fadeIn(tween(180)) + expandVertically(tween(200), expandFrom = Alignment.Top) +
+    scaleIn(tween(220), initialScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f))
+private val PillExit = fadeOut(tween(160)) + shrinkVertically(tween(200), shrinkTowards = Alignment.Top) +
+    scaleOut(tween(180), targetScale = 0.9f, transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f))

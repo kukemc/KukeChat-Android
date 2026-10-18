@@ -21,6 +21,7 @@ import ink.kuke.chat.ui.components.pressScale
 import ink.kuke.chat.ui.components.rememberInteraction
 import kotlin.math.sqrt
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -595,6 +596,8 @@ private fun MessageBodyContent(
         }
     }
     if (!isVoice && message.content.isNotBlank()) LinkPreviewCards(message)
+    // 「转文字」的结果：气泡正下方
+    if (isVoice) VoiceTranscriptNote(message, mine)
     // 领语音红包时说的那段话：气泡下面挂一个小标记，点它打开那个红包
     if (isVoice) redPacketVoiceOf(message)?.let { packetId ->
         Row(
@@ -714,7 +717,9 @@ private fun voiceBubbleWidth(seconds: Long): Dp = (120f + 120f * sqrt((seconds -
 
 /**
  * 语音消息（设计稿 P32 .voice）：左边强调色实心圆播放键，中间细圆角竖条波形，右端时长 `7″`。
- * 播放时波形按进度从左到右点亮（已放 = 强调色 / 白，未放 = 淡色）；自己的消息反色：白键、强调色图标、白条。
+ * 点气泡 = 播放 / 暂停（暂停后再点从原处接着放）；播放时波形按进度从左到右实时点亮（已放 = 强调色 / 白，未放 = 淡色），
+ * 右端时长变成剩余秒数倒数；在波形上点一下 / 横着拖 = 跳到那里接着放（拖的时候波形和剩余秒数跟着手指）。
+ * 自己的消息反色：白键、强调色图标、白条。聊天、收藏、精华、聊天记录详情都走这里（共用 MessageBody）。
  * [inset] 是外层气泡左右内边距之和，内容宽度 = 气泡宽度 − inset。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -722,7 +727,9 @@ private fun voiceBubbleWidth(seconds: Long): Dp = (120f + 120f * sqrt((seconds -
 private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
     val colors = KcTheme.colors
     val voice = Meta.voice(message)
-    val playing = VoicePlayer.playingId == message.id
+    // 当前这条（在放或暂停着）/ 正在出声
+    val active = VoicePlayer.playingId == message.id
+    val playing = active && !VoicePlayer.paused
     val seconds = (voice.durationMs / 1000).coerceAtLeast(1)
     val button = if (mine) Color.White else colors.fill
     val glyph = if (mine) colors.bubbleOut else colors.onFill
@@ -732,6 +739,22 @@ private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
     val levels = remember(message.id, voice.waveform) { voiceLevels(voice.waveform, message.id) }
     // 正在拖的位置（0–1）：拖动时进度跟着手指，松手才真的跳过去，免得边拖边卡顿
     var scrub by remember(message.id) { mutableStateOf<Float?>(null) }
+    // 右端的秒数：没在放 = 总时长；在放 / 暂停 / 拖动 = 剩余秒数（向上取整）。只在整秒变化时重组，进度本身只重画波形
+    val label by remember(message.id, voice.durationMs) {
+        androidx.compose.runtime.derivedStateOf {
+            val drag = scrub
+            val current = VoicePlayer.playingId == message.id
+            if (drag == null && !current) return@derivedStateOf seconds
+            val total = VoicePlayer.durationMs.takeIf { current && it > 0 } ?: voice.durationMs.coerceAtLeast(1000L)
+            val at = if (drag != null) (total * drag).toLong() else VoicePlayer.positionMs
+            ((total - at + 999) / 1000).coerceIn(0L, seconds)
+        }
+    }
+    // 秒数那格按总时长的字宽固定住：倒数时（10″ → 9″）波形不跟着伸缩
+    val labelStyle = KcTheme.type.caption.copy(fontSize = 12.sp, fontFeatureSettings = "tnum")
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = LocalDensity.current
+    val labelWidth = remember(seconds, labelStyle, density) { with(density) { measurer.measure("$seconds″", labelStyle).size.width.toDp() } }
     // 波形自己接了点按（跳进度），长按也得在这儿接，不然按在波形上弹不出菜单
     val longPress by androidx.compose.runtime.rememberUpdatedState(LocalMessageLongPress.current)
     Row(Modifier.width(voiceBubbleWidth(seconds) - inset).height(32.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -760,7 +783,7 @@ private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
                 .weight(1f)
                 .padding(start = 10.dp, end = 8.dp)
                 .height(32.dp)
-                // 波形上点一下 = 跳到那里；横着拖 = 拖进度（吃掉横划，不会触发引用 / 返回）
+                // 波形上点一下 = 跳到那里接着放；横着拖 = 拖进度（吃掉横划，不会触发引用 / 返回）
                 .pointerInput(message.id) {
                     detectTapGestures(onLongPress = { longPress?.invoke() }) { offset -> VoicePlayer.seek(message, offset.x / size.width.coerceAtLeast(1)) }
                 }
@@ -785,15 +808,80 @@ private fun VoiceContent(message: Message, mine: Boolean, inset: Dp) {
                 drawRoundRect(color, Offset(i * (bw + gap), (size.height - h) / 2f), Size(bw, h), CornerRadius(bw / 2f))
             }
             drawBars(dim)
-            // 只在播放中读进度：进度每帧变，只重画这块画布
-            val progress = scrub ?: if (playing) VoicePlayer.progress else 0f
+            // 只在画的时候读进度：位置每帧变，只重画这块画布（不重组）
+            val progress = scrub ?: if (VoicePlayer.playingId == message.id) VoicePlayer.progress else 0f
             if (progress > 0f) clipRect(right = progress * (n * (bw + gap) - gap)) { drawBars(lit) }
         }
         Text(
-            "$seconds″",
-            style = KcTheme.type.caption.copy(fontSize = 12.sp, fontFeatureSettings = "tnum"),
-            color = if (mine) colors.onBubbleOut.copy(alpha = 0.85f) else colors.muted,
+            "$label″",
+            style = labelStyle,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            maxLines = 1,
+            color = when {
+                active || scrub != null -> if (mine) colors.onBubbleOut else colors.text
+                mine -> colors.onBubbleOut.copy(alpha = 0.85f)
+                else -> colors.muted
+            },
+            modifier = Modifier.width(labelWidth),
         )
+    }
+}
+
+/**
+ * 语音转出来的文字：挂在语音气泡下面的一小块（小字、淡色、可以长按选中复制），底下一个「收起」。
+ * 状态在 [VoiceTranscripts]（这次打开应用期间记住每条展开没有）；转的过程中是一行「正在转文字…」。
+ * 展开 / 收起带高度动画，转完文字从一行长成几行也是平滑撑开的。
+ */
+@Composable
+private fun VoiceTranscriptNote(message: Message, mine: Boolean) {
+    val entry = VoiceTranscripts.entries[message.id]
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    // 收起的过程中留住最后的内容，别在淡出时闪成空的
+    var last by remember(message.id) { mutableStateOf(entry) }
+    if (entry != null) last = entry
+    androidx.compose.animation.AnimatedVisibility(
+        visible = entry?.expanded == true,
+        enter = androidx.compose.animation.fadeIn(tween(180)) + androidx.compose.animation.expandVertically(tween(200, easing = EaseSmooth), expandFrom = Alignment.Top),
+        exit = androidx.compose.animation.fadeOut(tween(140)) + androidx.compose.animation.shrinkVertically(tween(180, easing = EaseSmooth), shrinkTowards = Alignment.Top),
+    ) {
+        val text = last?.text
+        Column(
+            Modifier
+                .padding(top = 4.dp)
+                .widthIn(max = 248.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.text.copy(alpha = if (colors.isDark) 0.07f else 0.045f))
+                .animateContentSize(tween(180, easing = EaseSmooth))
+                .padding(start = 10.dp, end = 10.dp, top = 7.dp, bottom = 6.dp),
+            horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+        ) {
+            if (text == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SendSpinner(11.dp, colors.subtle, null)
+                    Text("正在转文字…", style = type.caption, color = colors.subtle, modifier = Modifier.padding(start = 6.dp))
+                }
+                return@Column
+            }
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    text.ifBlank { "没有识别出文字" },
+                    style = type.caption.copy(fontSize = 13.sp, lineHeight = 19.sp),
+                    color = if (text.isBlank()) colors.subtle else colors.muted,
+                )
+            }
+            Row(
+                Modifier
+                    .padding(top = 3.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { VoiceTranscripts.collapse(message.id) }
+                    .padding(horizontal = 2.dp, vertical = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("收起", style = type.caption.copy(fontSize = 11.sp), color = colors.subtle)
+                KcIcon(KcIcons.chevronUp, tint = colors.subtle, size = 11.dp, modifier = Modifier.padding(start = 2.dp))
+            }
+        }
     }
 }
 

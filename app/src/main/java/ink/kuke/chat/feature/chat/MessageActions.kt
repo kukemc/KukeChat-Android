@@ -61,7 +61,7 @@ import ink.kuke.chat.ui.theme.KcTheme
 data class MessageAction(val key: String, val label: String, val icon: ImageVector, val danger: Boolean = false)
 
 /**
- * 操作宫格（同电脑版右键菜单的顺序）：复制 引用 转发 多选 收藏 / 设为精华 撤回 删除 举报 添加到表情。
+ * 操作宫格（同电脑版右键菜单的顺序）：复制 / 转文字（语音） 引用 转发 多选 收藏 / 设为精华 撤回 删除 举报 添加到表情。
  * 「设为精华」只给群主 / 管理员；「撤回」给自己的消息（时限由服务端判断，超时会返回提示）和群管；
  * 红包、礼物、群文件消息服务端不允许转发（文件下载要鉴权，别的会话的人下不了），这里不给「转发」；「添加到表情」只在图片上出现。
  * 「收藏」「设为精华」不挑类型：语音、文件、合并转发、投票、红包都可以（卡片上的长按见 MessageRow 的 LocalMessageLongPress）。
@@ -69,6 +69,11 @@ data class MessageAction(val key: String, val label: String, val icon: ImageVect
 fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String? = null): List<MessageAction> = buildList {
     val copyable = message.type == "text" || message.content.isNotBlank() && message.type !in listOf("image", "voice", "red_packet", "gift", "poll", "forward_bundle")
     if (copyable) add(MessageAction("copy", "复制", KcIcons.copy))
+    // 语音转文字：转出来的字挂在气泡下面；已经展开着就换成「收起文字」
+    if (message.type == "voice" && !message.isRecalled) {
+        if (VoiceTranscripts.expanded(message.id)) add(MessageAction("transcribeHide", "收起文字", KcIcons.type))
+        else add(MessageAction("transcribe", "转文字", KcIcons.type))
+    }
     add(MessageAction("quote", "引用", KcIcons.quote))
     if (message.type !in listOf("red_packet", "gift", "system") && fileMetaOf(message) == null) add(MessageAction("forward", "转发", KcIcons.forward))
     add(MessageAction("select", "多选", KcIcons.checkSquare))

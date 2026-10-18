@@ -112,6 +112,14 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     private var pendingJob: Job? = null
     private var pendingExpiryJob: Job? = null
 
+    /**
+     * 这个会话里提到我的未读消息（@我 / @全体成员），聊天页右上角「有人@我」用，按消息 id 从旧到新。
+     * 两个来源合在一起：进会话时 GET /conversations/{id}/mentions/unread（旧后端 404 就不再请求），
+     * 和本地看到的（进来时未读的那几条、实时推来的）。看过的由界面按 SeenMarks 过滤掉
+     */
+    val unreadMentions = mutableStateListOf<MentionItem>()
+    private var mentionsSupported = true
+
     init {
         // 先用上次缓存的消息把列表填满：进入会话不空白，网络回来再合并最新的
         messages.addAll(graph.messageCache.get(conversationId))
@@ -123,8 +131,10 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     }
 
     fun start() {
+        // 先问服务端「哪些未读提到了我」：第一页拉完会记已读，之后再问就全是已读了，所以记已读要等它
+        val mentionsJob = scope.launch { loadUnreadMentions() }
         scope.launch {
-            loadLatest()
+            loadLatest(beforeRead = mentionsJob)
             initialLoaded.value = true
         }
         refreshPendingRedPackets(0)
@@ -141,6 +151,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                         outbox.confirm(incoming)
                         upsert(incoming)
                         persist()
+                        noteMention(incoming)
                         // 上下文模式下列表尾巴不是最新的那条：按收到的这条记已读
                         if (inContext) graph.conversations.markRead(conversationId, incoming.id) else markRead()
                         if (incoming.type == "red_packet" && incoming.senderId != myId) refreshPendingRedPackets()
@@ -148,6 +159,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                     "message.recalled" -> decode(data)?.takeIf { it.conversationId == conversationId }?.let { event ->
                         // 撤回事件只带 id / recalled_at，不能整条换掉，否则发送人、内容、metadata 全丢（显示成「用户 0」）
                         update(event.id) { current -> current.copy(recalledAt = event.recalledAt ?: current.recalledAt) }
+                        unreadMentions.removeAll { it.messageId == event.id }
                     }
                     "message.reaction.updated" -> {
                         val id = data["message_id"]?.jsonPrimitive?.longOrNull ?: return@collect
@@ -215,7 +227,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         if (outbox.listener === outboxListener) outbox.listener = null
     }
 
-    private suspend fun loadLatest() {
+    private suspend fun loadLatest(beforeRead: Job? = null) {
         // 上下文模式下不往这一段里并最新一页（中间有空洞），等往下滑补齐或点「回到最新」
         if (inContext) return
         val gen = generation
@@ -231,8 +243,12 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                 if (!dividerDone) {
                     dividerDone = true
                     if (unreadAtEntry > 0 && unreadAtEntry < messages.size) newDividerId.value = messages[messages.size - unreadAtEntry].id
+                    // 进来时未读的那几条里提到我的：本地也认一遍（服务端接口没有 / 没拉到时靠它）
+                    if (unreadAtEntry > 0) messages.takeLast(unreadAtEntry).forEach(::noteMention)
                 }
                 persist()
+                // 等「未读 @我」问完再记已读（最多等 3 秒，别让已读一直挂着）
+                beforeRead?.let { job -> kotlinx.coroutines.withTimeoutOrNull(3000) { job.join() } }
                 markRead()
             }
             .onFailure { error.value = it.userMessage() }
@@ -606,6 +622,92 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                     pendingRedPackets.clear()
                 }
             } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * 进会话时问一次「未读里提到我的」：GET /conversations/{id}/mentions/unread → {items: [{message_id, kind, created_at}], total}。
+     * 进来时没有未读就不问；旧后端没有这个接口（404 / 405）就关掉，只靠本地识别
+     */
+    private suspend fun loadUnreadMentions() {
+        if (!mentionsSupported) return
+        val conversation = graph.conversations.find(conversationId)
+        if (unreadAtEntry <= 0 && conversation?.mentionPending.isNullOrBlank()) return
+        try {
+            val items = graph.api.get("/conversations/$conversationId/mentions/unread").asObj()?.a("items").orEmpty().mapNotNull { element ->
+                val obj = element.asObj() ?: return@mapNotNull null
+                val id = obj.l("message_id") ?: return@mapNotNull null
+                MentionItem(id, if (obj.s("kind") == "all") "all" else "me")
+            }
+            addMentions(items)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: ink.kuke.chat.core.net.ApiException) {
+            if (e.status == 404 || e.status == 405) mentionsSupported = false
+        } catch (_: Exception) {
+        }
+    }
+
+    /** 这条提到了我（别人发的、没撤回）就记进 unreadMentions */
+    private fun noteMention(message: Message) {
+        val kind = Meta.mentionKind(message, myId) ?: return
+        addMentions(listOf(MentionItem(message.id, kind)))
+    }
+
+    private fun addMentions(items: List<MentionItem>) {
+        val fresh = items.filter { item -> unreadMentions.none { it.messageId == item.messageId } }.distinctBy { it.messageId }
+        if (fresh.isEmpty()) return
+        val next = (unreadMentions + fresh).sortedBy { it.messageId }
+        unreadMentions.clear()
+        unreadMentions.addAll(next)
+    }
+
+    // ------------------------------------------------------------ 语音转文字
+
+    /**
+     * 长按语音「转文字」：POST /conversations/{id}/messages/{mid}/transcribe → {text, cached}。
+     * 转过的（本次打开应用里转过、或消息自带 voice_transcript）直接展开，不再请求；正在转的不重复发。
+     * 失败按错误码给一句提示：422 not_voice / voice_too_long、503 transcribe_unavailable、429 transcribe_rate_limited
+     */
+    fun transcribe(message: Message) {
+        val id = message.id
+        val known = VoiceTranscripts.entries[id]
+        if (known != null) {
+            // 转过的 / 正在转的：展开就行
+            VoiceTranscripts.entries[id] = known.copy(expanded = true)
+            return
+        }
+        message.voiceTranscript?.let { text ->
+            VoiceTranscripts.entries[id] = VoiceTranscripts.Entry(text, expanded = true)
+            return
+        }
+        VoiceTranscripts.entries[id] = VoiceTranscripts.Entry(null, expanded = true)
+        scope.launch {
+            try {
+                val text = graph.api.post("/conversations/$conversationId/messages/$id/transcribe").asObj()?.s("text").orEmpty().trim()
+                VoiceTranscripts.entries[id] = VoiceTranscripts.Entry(text, expanded = VoiceTranscripts.entries[id]?.expanded ?: true)
+                update(id) { it.copy(voiceTranscript = text) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                VoiceTranscripts.entries.remove(id)
+                throw e
+            } catch (e: ink.kuke.chat.core.net.ApiException) {
+                VoiceTranscripts.entries.remove(id)
+                notice.value = when (e.code) {
+                    "not_voice" -> "这条不是语音，不能转文字"
+                    "voice_too_long" -> "语音太长了，暂时转不了文字"
+                    "transcribe_unavailable" -> "转文字服务暂时不可用，请稍后再试"
+                    "transcribe_rate_limited" -> "转得太频繁了，歇一会儿再试"
+                    else -> when (e.status) {
+                        429 -> "转得太频繁了，歇一会儿再试"
+                        503 -> "转文字服务暂时不可用，请稍后再试"
+                        404 -> "当前服务器还不支持语音转文字"
+                        else -> e.message.ifBlank { "转文字失败，请稍后再试" }
+                    }
+                }
+            } catch (_: Exception) {
+                VoiceTranscripts.entries.remove(id)
+                notice.value = "网络不太好，转文字失败了"
             }
         }
     }

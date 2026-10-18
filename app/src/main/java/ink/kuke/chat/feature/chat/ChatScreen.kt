@@ -247,6 +247,28 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             }
         }
     }
+    // 「看过」：红包、@我 的气泡在屏幕上露出一半以上（或占了视口三分之一）就记下，右上角胶囊不再算它们。
+    // 跳转途中（列表在换、在滚）不算，停稳了再看
+    remember(me?.id) { SeenMarks.bind(context, me?.id) }
+    LaunchedEffect(listState, controller) {
+        snapshotFlow {
+            if (jumping || positioning) return@snapshotFlow null
+            val info = listState.layoutInfo
+            val leading = if (controller.inContext) 0 else pendingItems.size
+            val visible = info.visibleItemsInfo.mapNotNullTo(HashSet()) { item ->
+                val shownPx = minOf(item.offset + item.size, info.viewportEndOffset) - maxOf(item.offset, info.viewportStartOffset)
+                if (shownPx * 2 < item.size && shownPx * 3 < info.viewportSize.height) return@mapNotNullTo null
+                messages.getOrNull(messages.size - 1 - (item.index - leading))?.id
+            }
+            if (visible.isEmpty()) return@snapshotFlow null
+            controller.pendingRedPackets.filter { it.messageId in visible }.map { it.id } to
+                controller.unreadMentions.filter { it.messageId in visible }.map { it.messageId }
+        }.collect { found ->
+            val (packets, mentions) = found ?: return@collect
+            SeenMarks.markRedPackets(packets)
+            SeenMarks.markMentions(mentions)
+        }
+    }
     /** 「回到最新」：上下文模式下换回最新一页，否则滚到底 */
     fun goLatest() {
         jumpJob?.cancel()
@@ -548,14 +570,17 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     }
                 }
                 GiftStageArea(giftStage)
-                // 「N 个红包未领」：右上角（有群公告卡时在它下面），点一下跳到那条红包，多个就从最早的开始逐个轮
+                // 右上角（有群公告卡时在它下面）叠两个胶囊：「有人@我」在上、「N 个红包未领」在下。
+                // 点一下跳到最早没看过的那条，跳过去 / 在屏幕上出现过就算看过，不再计数
                 if (!selecting) {
                     val hasAnnouncement = conversation?.isGroup == true && !conversation.announcement.isNullOrBlank()
-                    PendingRedPacketPill(
-                        controller = controller,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (hasAnnouncement) 56.dp else 10.dp, end = 12.dp),
-                        onJump = { jumpTo(it) },
-                    )
+                    Column(
+                        Modifier.align(Alignment.TopEnd).padding(top = if (hasAnnouncement) 56.dp else 10.dp, end = 12.dp),
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        MentionPill(controller = controller, onJump = { jumpTo(it) })
+                        PendingRedPacketPill(controller = controller, onJump = { jumpTo(it) })
+                    }
                 }
                 // 回到最新（右下胶囊）：上下文模式下一直在，点了直接换回最新一页；平时有新消息才出现
                 val showLatest = controller.inContext || (!atBottom && newest > lastSeenNewest)
@@ -698,6 +723,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 onAction = { key ->
                     when (key) {
                         "copy" -> copyText(context, message.content).also { toast(context, "已复制") }
+                        "transcribe" -> controller.transcribe(message)
+                        "transcribeHide" -> VoiceTranscripts.collapse(message.id)
                         "quote" -> controller.quoteMessage(message)
                         "bookmark" -> controller.bookmark(message)
                         "feature" -> scope.launch {
