@@ -28,8 +28,8 @@ android {
         applicationId = "ink.kuke.chat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 203
-        versionName = "2.0.3"
+        versionCode = 204
+        versionName = "2.0.4"
         buildConfigField("String", "API_BASE_URL", "\"${requiredConfig("kukechat.apiBaseUrl")}\"")
         buildConfigField("String", "WS_URL", "\"${requiredConfig("kukechat.wsUrl")}\"")
         // 邀请链接深链接（服务端发 {INVITE_BASE_URL}?invite=<token>）：在 local.properties 配 kukechat.inviteBaseUrl（同服务端 INVITE_BASE_URL）才认网页链接；
