@@ -102,6 +102,8 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.work.runtime)
+    // 系统分享面板的「直接分享」：Android 9 及以下靠它把会话快捷方式转成 ChooserTarget（10+ 系统自己读 shortcuts.xml）
+    implementation(libs.androidx.sharetarget)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)

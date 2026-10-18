@@ -68,6 +68,8 @@ class AppGraph(context: Context) {
         ink.kuke.chat.service.RealtimeService.stop(appContext)
         ink.kuke.chat.service.Notifier.cancelAll(appContext)
         ink.kuke.chat.service.CatchUpWorker.cancel(appContext)
+        // 系统分享面板 / 桌面长按里的会话快捷方式是这个账号的，一起撤掉
+        ink.kuke.chat.feature.share.ShareShortcuts.clear(appContext)
     }
 
     fun acknowledgeSignOut() {

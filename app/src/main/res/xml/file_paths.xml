@@ -2,4 +2,6 @@
 <paths>
     <cache-path name="updates" path="updates/" />
     <cache-path name="group_files" path="group-files/" />
+    <!-- 分享进来的附件的本地副本（feature/share/ShareCache）：name 要和路径首段一致，ShareCache.fileOf 靠它反查文件 -->
+    <cache-path name="share" path="share/" />
 </paths>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  直接分享：ShareShortcuts 发布的会话快捷方式带 category ink.kuke.chat.category.SHARE_TARGET，
+  系统分享面板据此把它们放进「直接分享」那一排，点了打开 ShareReceiverActivity 并带上快捷方式 id。
+  targetClass 是类名（不随 applicationId 的 .dev 后缀变）。
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="ink.kuke.chat.feature.share.ShareReceiverActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="video/*" />
+        <data android:mimeType="*/*" />
+        <category android:name="ink.kuke.chat.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

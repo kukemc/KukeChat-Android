@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">KukeChat</string>
+    <!-- 系统分享面板里显示的名字 -->
+    <string name="share_label">KukeChat</string>
 </resources>

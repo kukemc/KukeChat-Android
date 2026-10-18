@@ -51,6 +51,41 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="kukechat" android:host="invite" />
             </intent-filter>
+            <!-- 直接分享快捷方式（share-target）+ 桌面长按图标的最近会话，见 feature/share/ShareShortcuts -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- 从别的应用分享进来（文字 / 链接 / 图片 / 视频 / 文件）：单独一个任务，不搅乱主界面的返回栈，发完就关 -->
+        <activity
+            android:name=".feature.share.ShareReceiverActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_label"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.share"
+            android:theme="@style/Theme.KukeChat"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <!-- Android 9 及以下的直接分享：androidx.sharetarget 把快捷方式转成 ChooserTarget -->
+            <meta-data
+                android:name="android.service.chooser.chooser_target_service"
+                android:value="androidx.sharetarget.ChooserTargetServiceCompat" />
         </activity>
 
         <!-- 群文件视频播放页：横屏全屏时不重建（播放器不中断） -->
