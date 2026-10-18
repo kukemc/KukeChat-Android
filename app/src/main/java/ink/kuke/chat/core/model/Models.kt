@@ -100,6 +100,8 @@ data class Conversation(
     @SerialName("level_titles") val levelTitles: List<LevelTitle>? = null,
     /** 群待办（GroupTodo），没有为 null；解析见 feature/groupplus 的 GroupTodo.parse */
     @SerialName("group_todo") val groupTodo: JsonObject? = null,
+    /** 好友火花（docs/sparks.md），好友私聊才有；没有可画的为 null */
+    val spark: Spark? = null,
 ) {
     val isGroup: Boolean get() = type == "group"
 

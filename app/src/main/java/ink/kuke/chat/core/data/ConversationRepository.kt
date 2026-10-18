@@ -52,6 +52,7 @@ class ConversationRepository(
                 when {
                     event.type == "message.created" -> runCatching { KcJson.decodeFromJsonElement(Message.serializer(), event.data) }.getOrNull()?.let(::applyMessage)
                     event.type == "conversation.read" -> applyRead(event.data)
+                    event.type == "spark.updated" -> applySparkEvent(event.data)
                     // 红包结束了（抢完 / 过期 / 撤回）：「[有红包]」可能该摘掉了，以服务端为准重拉
                     event.type == "red_packet.updated" && event.data["status"]?.jsonPrimitive?.content.let { it != null && it != "active" } -> refreshSoon()
                     event.type == "message.recalled" || event.type.startsWith("conversation.") || event.type.startsWith("group.") ||
@@ -141,6 +142,19 @@ class ConversationRepository(
         if (userId != null && userId == currentUserId()) {
             _items.update { list -> list.map { if (it.id == conversationId) it.copy(unreadCount = 0, mentionPending = null) else it } }
         }
+    }
+
+    /** 好友火花变了（spark.updated，docs/sparks.md 第 4 节）：只改这个私聊的 spark，不动排序 */
+    private fun applySparkEvent(data: JsonObject) {
+        val conversationId = data["conversation_id"]?.jsonPrimitive?.longOrNull ?: return
+        val spark = data["spark"]?.let { runCatching { KcJson.decodeFromJsonElement(ink.kuke.chat.core.model.Spark.serializer(), it) }.getOrNull() } ?: return
+        applySpark(conversationId, spark)
+    }
+
+    /** 本地换掉某个私聊的火花（重燃成功后界面直接调） */
+    fun applySpark(conversationId: Long, spark: ink.kuke.chat.core.model.Spark) {
+        val shown = spark.takeIf { it.visible }
+        _items.update { list -> list.map { if (it.id == conversationId) it.copy(spark = shown) else it } }
     }
 
     /** 置顶的在前，然后按最近更新 */

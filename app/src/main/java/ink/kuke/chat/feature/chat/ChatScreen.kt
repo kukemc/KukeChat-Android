@@ -841,6 +841,8 @@ private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: 
                             ink.kuke.chat.feature.user.FriendBadgeMark(peer, size = 18.dp)
                         }
                     }
+                    // 单聊：好友火花，点开说明面板（docs/sparks.md）
+                    if (peer != null && conversation != null) ink.kuke.chat.feature.spark.SparkHeaderEntry(conversation, peer)
                 }
                 val sub = when {
                     conversation == null -> ""

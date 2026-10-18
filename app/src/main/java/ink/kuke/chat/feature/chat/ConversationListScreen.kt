@@ -551,6 +551,8 @@ private fun ConversationRow(conversation: Conversation, draft: String?, onClick:
                     )
                     // 单聊：好友徽章挂在名字后（不是好友 / 未开放时什么也不画）
                     if (!conversation.isGroup) FriendBadgeMark(conversation.directUser?.id, size = 16.dp, modifier = Modifier.padding(start = 4.dp))
+                    // 单聊：好友火花（图标 + 天数，docs/sparks.md）
+                    if (!conversation.isGroup) ink.kuke.chat.feature.spark.SparkMark(conversation.spark, modifier = Modifier.padding(start = 4.dp))
                     PlusTierTag(conversation.effectivePlusTier, Modifier.padding(start = 6.dp), compact = true)
                 }
                 Text(listTime(conversation.lastMessage?.createdAt ?: conversation.updatedAt), modifier = Modifier.padding(start = 8.dp), style = type.caption, color = if (unread > 0 && !conversation.quiet) colors.accent else colors.subtle)

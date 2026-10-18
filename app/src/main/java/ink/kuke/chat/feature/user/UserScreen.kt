@@ -261,6 +261,10 @@ fun UserScreen(graph: AppGraph, userId: Long) {
                                 }
                             }
                         }
+                        // 好友之间：火花（docs/sparks.md）
+                        if (!isSelf && isFriend) {
+                            item(key = "spark") { ink.kuke.chat.feature.spark.SparkProfileRow(graph, p.id) }
+                        }
                         item(key = "gifts") {
                             GiftWallSection(graph, p.id, p.displayName, p.avatarUrl, isSelf, p.isBot, liveCharm[p.id] ?: p.charm, onSend = { openGift(p) })
                         }
