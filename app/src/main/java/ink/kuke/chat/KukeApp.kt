@@ -22,6 +22,8 @@ class KukeApp : Application(), ImageLoaderFactory {
         ink.kuke.chat.feature.chat.VoicePlayer.bind(this)
         // 最近会话发布成直接分享快捷方式（会话列表变了就更新）
         ink.kuke.chat.feature.share.ShareShortcuts.bind(this, graph)
+        // 自动检查更新：发版推送、回前台超过 1 小时再查（启动那次由 UpdateHost 发起）
+        ink.kuke.chat.feature.settings.UpdateCenter.watch(graph)
         // 上次进程里分享进来的附件副本：新进程里已经没有任何东西引用它们了（只留刚拷的，防同一进程里正在准备发送的）
         graph.scope.launch(kotlinx.coroutines.Dispatchers.IO) { ink.kuke.chat.feature.share.ShareCache.sweep(this@KukeApp, olderThanMs = 10 * 60 * 1000L) }
     }

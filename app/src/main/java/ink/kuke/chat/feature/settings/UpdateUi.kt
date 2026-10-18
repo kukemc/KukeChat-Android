@@ -1,6 +1,7 @@
 package ink.kuke.chat.feature.settings
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -41,18 +42,26 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.ui.theme.KcTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import kotlin.random.Random
 
 /**
  * 更新状态（进程内单例）：启动时检查一次，设置页「检查更新」再查；下载放在 AppGraph 的作用域里，离开页面不会中断。
+ * 进程常驻后台（实时连接服务）时另有两种自动检查，见 [watch]：后端推送 release.published、回到前台且距上次检查超过 1 小时。
  * 对话框由 MainActivity 里的 [UpdateHost] 统一画，盖在整个应用上面（强制更新时挡住使用）。
  */
 object UpdateCenter {
@@ -68,6 +77,10 @@ object UpdateCenter {
 
     private const val PREFS = "kc_app_update"
     private const val KEY_SKIPPED = "skipped_version"
+    /** 回到前台时，距上次检查超过这么久就再查一次 */
+    private const val FOREGROUND_RECHECK_MS = 60 * 60 * 1000L
+    /** 收到 release.published 后随机等 0–30 秒再查，免得所有在线客户端同一秒打到服务器 */
+    private const val PUSH_JITTER_MS = 30_000L
 
     private val _phase = MutableStateFlow<Phase>(Phase.Idle)
     val phase: StateFlow<Phase> = _phase.asStateFlow()
@@ -80,6 +93,10 @@ object UpdateCenter {
     val latest: StateFlow<AppUpdater.Info?> = _latest.asStateFlow()
 
     private var startupChecked = false
+    private var watching = false
+    private var pushCheck: Job? = null
+    /** 上次发起检查的时间（elapsedRealtime，含休眠）；0 表示还没查过 */
+    @Volatile private var lastCheckedAt = 0L
 
     /** 当前对话框关联的版本信息（有的话） */
     fun infoOf(phase: Phase): AppUpdater.Info? = when (phase) {
@@ -96,6 +113,35 @@ object UpdateCenter {
         check(graph, manual = false)
     }
 
+    /**
+     * 进程启动时（KukeApp.onCreate，主线程）调一次。进程可能在后台活好几天，只靠启动检查会一直发现不了新版本：
+     * - 后端发版时推 release.published（KukeChat-Server/docs/releases.md 2.3）：是安卓 stable 的就随机等 0–30 秒后查一次；
+     *   在后台收到也查，对话框等用户回到应用时由 [UpdateHost] 画出来；
+     * - 回到前台（整个应用，不是单个页面）时距上次检查超过 1 小时就再查。
+     * 都是普通的自动检查：「稍后」跳过的版本不弹，强制更新照常弹。
+     */
+    fun watch(graph: AppGraph) {
+        if (watching) return
+        watching = true
+        graph.scope.launch {
+            graph.realtime.events.collect { event ->
+                if (event.type != "release.published") return@collect
+                val platform = event.data["platform"]?.jsonPrimitive?.contentOrNull
+                val channel = event.data["channel"]?.jsonPrimitive?.contentOrNull
+                if (platform != AppUpdater.PLATFORM || channel != AppUpdater.CHANNEL) return@collect
+                pushCheck?.cancel()
+                pushCheck = graph.scope.launch(Dispatchers.Main) {
+                    delay(Random.nextLong(PUSH_JITTER_MS))
+                    check(graph, manual = false)
+                }
+            }
+        }
+        ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_START || !startupChecked) return@LifecycleEventObserver
+            if (SystemClock.elapsedRealtime() - lastCheckedAt > FOREGROUND_RECHECK_MS) check(graph, manual = false)
+        })
+    }
+
     /** 手动检查总是打开对话框显示结果；自动检查只在有没跳过的新版本（或强制更新）时打开 */
     fun check(graph: AppGraph, manual: Boolean) {
         val now = _phase.value
@@ -108,6 +154,7 @@ object UpdateCenter {
             return
         }
         _phase.value = Phase.Checking
+        lastCheckedAt = SystemClock.elapsedRealtime()
         if (manual) _dialogOpen.value = true
         graph.scope.launch {
             runCatching { AppUpdater.check(graph.api) }
