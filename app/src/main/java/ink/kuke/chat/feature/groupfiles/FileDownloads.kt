@@ -239,6 +239,8 @@ object FileDownloads {
         val apiPath = "/conversations/$conversationId/files/$fileId/download"
         val headers = ClientProof.headers("GET", apiPath).toMutableMap()
         graph.session.token?.let { headers["Authorization"] = "Bearer $it" }
+        // 系统下载器不走 OkHttp 拦截器：设备标识头这里手动带上
+        headers.putAll(graph.api.device.headers())
         return FileSource(Endpoints.api + apiPath, headers)
     }
 

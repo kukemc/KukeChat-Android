@@ -64,6 +64,7 @@ import ink.kuke.chat.BuildConfig
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.SignedOut
 import ink.kuke.chat.core.model.TokenResponse
+import ink.kuke.chat.core.net.ApiException
 import ink.kuke.chat.core.net.KcJson
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.core.session.Session
@@ -110,6 +111,11 @@ fun LoginScreen(graph: AppGraph, signedOut: SignedOut?, onSignedIn: () -> Unit) 
         }
         SignedOut.Expired -> "登录已过期，请重新登录"
         SignedOut.PasswordReset -> "密码已被重置，请用新密码登录"
+        is SignedOut.DeviceBanned -> buildString {
+            append("此设备已被限制使用")
+            signedOut.info.reason?.takeIf { it.isNotBlank() }?.let { append("：$it") }
+            append(if (signedOut.info.permanent) "（永久）" else signedOut.info.expiresAt?.let { "，解除时间 ${banTime(it)}" } ?: "")
+        }
         null -> null
     }
 
@@ -179,7 +185,11 @@ fun LoginScreen(graph: AppGraph, signedOut: SignedOut?, onSignedIn: () -> Unit) 
             }.onSuccess {
                 graph.acknowledgeSignOut()
                 onSignedIn()
-            }.onFailure { error = it.userMessage() }
+            }.onFailure {
+                // 设备被封：上面的说明条已经写清楚了，不再重复一行红字；其余（含 too_many_accounts_on_device、
+                // device_required、registration_ip_throttled）直接显示服务端给的 detail.message
+                error = if ((it as? ApiException)?.deviceBan != null) null else it.userMessage()
+            }
             busy = false
         }
     }
@@ -378,3 +388,7 @@ fun LoginScreen(graph: AppGraph, signedOut: SignedOut?, onSignedIn: () -> Unit) 
         }
     }
 }
+
+/** 解除时间：能解析就按本地时间显示到分钟，否则原样 */
+private fun banTime(iso: String): String =
+    ink.kuke.chat.core.ui.parseInstant(iso)?.atZone(java.time.ZoneId.systemDefault())?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) ?: iso

@@ -5,6 +5,8 @@ import ink.kuke.chat.core.data.ConversationRepository
 import ink.kuke.chat.core.data.MessageCache
 import ink.kuke.chat.core.data.ScreenCache
 import ink.kuke.chat.core.net.Api
+import ink.kuke.chat.core.net.DeviceBan
+import ink.kuke.chat.core.net.DeviceIdentity
 import ink.kuke.chat.core.net.Suspension
 import ink.kuke.chat.core.realtime.RealtimeClient
 import ink.kuke.chat.core.session.SessionStore
@@ -21,6 +23,8 @@ sealed interface SignedOut {
     data object Expired : SignedOut
     data class Suspended(val info: Suspension) : SignedOut
     data object PasswordReset : SignedOut
+    /** 这台设备被封（403 device_banned）：换号也登不上，登录页一直挂着说明 */
+    data class DeviceBanned(val info: DeviceBan) : SignedOut
 }
 
 /**
@@ -39,7 +43,15 @@ class AppGraph(context: Context) {
         tokenProvider = { session.token },
         onSuspended = { signOut(SignedOut.Suspended(it)) },
         onUnauthorized = { if (session.token != null) signOut(SignedOut.Expired) },
+        device = DeviceIdentity.create(appContext),
+        // 登录着就退出；在登录页（登录 / 注册被拒）只挂上说明
+        onDeviceBanned = { if (session.token != null) signOut(SignedOut.DeviceBanned(it)) else _signedOut.value = SignedOut.DeviceBanned(it) },
     )
+
+    init {
+        // 还没有设备令牌：启动时在后台要一个（登录 / 注册前还会再等一下）；读令牌文件也放后台
+        scope.launch(Dispatchers.IO) { api.primeDevice() }
+    }
 
     val realtime = RealtimeClient(
         http = api.http,

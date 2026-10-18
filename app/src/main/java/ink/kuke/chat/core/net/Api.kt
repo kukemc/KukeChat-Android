@@ -1,9 +1,15 @@
 package ink.kuke.chat.core.net
 
 import ink.kuke.chat.BuildConfig
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -85,7 +91,22 @@ object ClientProof {
 /** 账号被封禁（403 account_suspended）：任何接口都可能返回，收到就要退回登录页并说明原因。 */
 data class Suspension(val message: String, val reason: String?, val bannedUntil: String?, val permanent: Boolean)
 
+/** 设备被封禁（403 device_banned）：换账号也没用，任何接口都可能返回，处理同账号封禁。 */
+data class DeviceBan(val message: String, val reason: String?, val expiresAt: String?, val permanent: Boolean)
+
 class ApiException(val status: Int, val code: String?, override val message: String, val detail: JsonElement?) : IOException(message) {
+    val deviceBan: DeviceBan?
+        get() {
+            if (status != 403 || code != "device_banned") return null
+            val obj = detail as? JsonObject
+            return DeviceBan(
+                message = message,
+                reason = (obj?.get("reason") as? JsonPrimitive)?.contentOrNull,
+                expiresAt = (obj?.get("expires_at") as? JsonPrimitive)?.contentOrNull,
+                permanent = (obj?.get("permanent") as? JsonPrimitive)?.booleanOrNull == true,
+            )
+        }
+
     val suspension: Suspension?
         get() {
             if (status != 403 || code != "account_suspended") return null
@@ -100,15 +121,28 @@ class ApiException(val status: Int, val code: String?, override val message: Str
 }
 
 /**
- * HTTP 接口。令牌由 tokenProvider 给（SessionStore）；任何响应里出现封禁就回调 onSuspended。
+ * HTTP 接口。令牌由 tokenProvider 给（SessionStore）；任何响应里出现封禁就回调 onSuspended / onDeviceBanned。
  * 失败抛 ApiException（服务端拒绝）或 IOException（网络问题）。
+ * 设备标识头由 http 上的拦截器统一加（直接用 http 发的上传 / 下载也带上），响应里发了新设备令牌就存下来。
  */
 class Api(
     private val tokenProvider: () -> String?,
     private val onSuspended: (Suspension) -> Unit,
     private val onUnauthorized: () -> Unit,
+    val device: DeviceIdentity,
+    private val onDeviceBanned: (DeviceBan) -> Unit = {},
 ) {
     val http: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor { chain ->
+            val request = chain.request()
+            // 只给自家 /api/v1 加（预签名直传、更新包下载这些第三方地址不带）
+            if (!request.url.toString().startsWith(Endpoints.api)) return@addInterceptor chain.proceed(request)
+            val builder = request.newBuilder()
+            device.headers().forEach { (key, value) -> if (request.header(key) == null) builder.header(key, value) }
+            val response = chain.proceed(builder.build())
+            response.header(DeviceIdentity.HEADER_ISSUE)?.let(device::accept)
+            response
+        }
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
@@ -126,12 +160,34 @@ class Api(
     /** multipart 上传（字段名 file） */
     suspend fun upload(path: String, body: RequestBody): JsonElement = send("POST", path, body)
 
-    private suspend fun send(method: String, path: String, body: RequestBody?): JsonElement = withContext(Dispatchers.IO) {
+    private suspend fun send(method: String, path: String, body: RequestBody?, auth: Boolean = true): JsonElement = withContext(Dispatchers.IO) {
+        // 登录 / 注册前确保要过设备令牌，第一次注册就能带上（最多等 3 秒，要不到也照常提交）
+        if (path.startsWith("/auth/login") || path.startsWith("/auth/register")) withTimeoutOrNull(3_000) { primeDevice().await() }
         val builder = Request.Builder().url(Endpoints.api + path).method(method, body)
         ClientProof.headers(method, path).forEach { (key, value) -> builder.header(key, value) }
-        tokenProvider()?.let { builder.header("Authorization", "Bearer $it") }
+        if (auth) tokenProvider()?.let { builder.header("Authorization", "Bearer $it") }
         val response = http.newCall(builder.build()).await()
         response.use { parse(it) }
+    }
+
+    private val deviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val deviceLock = Any()
+    private var deviceJob: Deferred<Unit>? = null
+
+    /**
+     * 本地没有设备令牌就向 GET /auth/device 要一个（不带登录令牌）。同一时间只发一个请求；
+     * 上次失败了（断网）再调会重新要。已有令牌直接返回完成。
+     */
+    fun primeDevice(): Deferred<Unit> = synchronized(deviceLock) {
+        deviceJob?.takeIf { !it.isCompleted }?.let { return it }
+        if (device.token() != null) return CompletableDeferred(Unit)
+        deviceScope.async {
+            runCatching {
+                val result = send("GET", "/auth/device", null, auth = false)
+                device.accept(((result as? JsonObject)?.get("device") as? JsonPrimitive)?.contentOrNull)
+            }
+            Unit
+        }.also { deviceJob = it }
     }
 
     private fun parse(response: Response): JsonElement {
@@ -147,6 +203,7 @@ class Api(
         } ?: "请求失败（${response.code}）"
         val error = ApiException(response.code, code, message, detail)
         error.suspension?.let(onSuspended)
+        error.deviceBan?.let(onDeviceBanned)
         if (response.code == 401) onUnauthorized()
         throw error
     }
