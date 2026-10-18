@@ -89,20 +89,26 @@ internal fun CaseEvidence(
         }
         shown.forEach { message ->
             val target = message.isTarget
+            // 被举报人在上下文里说的每一句都标出来（淡边框 + 名字着色 + 正文加粗），被举报的那一条再额外强调
+            val reported = !target && message.speaker == "被举报人"
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                    .background(if (target) colors.danger.copy(alpha = 0.08f) else colors.panel)
-                    .then(if (target) Modifier.border(1.5.dp, colors.danger.copy(alpha = 0.5f), RoundedCornerShape(14.dp)) else Modifier)
+                    .background(if (target) colors.danger.copy(alpha = 0.08f) else if (reported) colors.danger.copy(alpha = 0.03f) else colors.panel)
+                    .then(
+                        if (target) Modifier.border(1.5.dp, colors.danger.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        else if (reported) Modifier.border(1.dp, colors.danger.copy(alpha = 0.22f), RoundedCornerShape(14.dp))
+                        else Modifier,
+                    )
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         message.speaker + if (target) " · 被举报" else "", style = type.caption,
-                        color = if (target) colors.danger else colors.muted, fontWeight = FontWeight.W600,
+                        color = if (target || reported) colors.danger else colors.muted, fontWeight = FontWeight.W600,
                     )
                 }
-                MessageBody(message) { urls, index -> viewer = urls to index }
+                MessageBody(message, bold = reported) { urls, index -> viewer = urls to index }
             }
         }
     }
@@ -113,7 +119,7 @@ internal fun CaseEvidence(
  * 内容为空（撤回 / 删除，或服务端没给）显示灰字占位，不留白。
  */
 @Composable
-private fun MessageBody(message: CaseMessage, onOpenImage: (List<String>, Int) -> Unit) {
+private fun MessageBody(message: CaseMessage, bold: Boolean = false, onOpenImage: (List<String>, Int) -> Unit) {
     val colors = KcTheme.colors
     val content = message.content?.takeIf { it.isNotBlank() }
     val pictures = buildList {
@@ -127,7 +133,7 @@ private fun MessageBody(message: CaseMessage, onOpenImage: (List<String>, Int) -
         return
     }
     if (voice != null) EvidenceVoice(key = "jury-voice:${message.offset}:$voice", url = voice)
-    if (text != null) Text(text, style = KcTheme.type.body, color = colors.text)
+    if (text != null) Text(text, style = KcTheme.type.body, color = colors.text, fontWeight = if (bold) FontWeight.W600 else null)
     pictures.forEachIndexed { index, url -> EvidenceImage(url) { onOpenImage(pictures, index) } }
 }
 
