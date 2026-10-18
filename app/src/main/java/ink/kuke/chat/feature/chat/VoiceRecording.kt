@@ -201,7 +201,12 @@ class VoiceRecorder(private val context: Context) {
  * 输入卡里的 [HoldToTalk] 管手势，[VoiceRecordingOverlay] 管显示，两边共用这一份。
  */
 @Stable
-internal class VoiceSession(private val context: Context, private val scope: CoroutineScope) {
+internal class VoiceSession(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    /** 最长录多久，到了自动结束并发送（聊天 60 秒；语音红包 15 秒） */
+    val maxMs: Long = MAX_MS,
+) {
     enum class Phase { Idle, Holding, Locked }
     enum class Zone { None, Cancel, Lock }
 
@@ -254,7 +259,7 @@ internal class VoiceSession(private val context: Context, private val scope: Cor
         dragX = 0f
     }
 
-    /** 每帧调一次：取新采样、更新计时，到 60 秒自动发送 */
+    /** 每帧调一次：取新采样、更新计时，到 [maxMs] 自动发送 */
     fun tick(frameMs: Long) {
         if (phase == Phase.Idle) return
         frameAt = frameMs
@@ -270,7 +275,7 @@ internal class VoiceSession(private val context: Context, private val scope: Cor
         }
         val target = (bars.lastOrNull() ?: 0) / 100f
         level += (target - level) * 0.2f
-        if (elapsed >= MAX_MS) finish(send = true)
+        if (elapsed >= maxMs) finish(send = true)
     }
 
     /** 结束录音：[send] = 发出去（不足 1 秒提示太短），否则丢弃。重复调用无副作用 */
@@ -382,6 +387,14 @@ internal fun HoldToTalk(session: VoiceSession) {
     ) {
         Text("按住说话", style = KcTheme.type.secondary.copy(fontWeight = FontWeight.W600), color = colors.text)
     }
+}
+
+/** 语音消息 metadata.voice 的内容（同 ChatController.sendVoice）：时长、格式、大小、波形 */
+internal fun voiceInfo(durationMs: Long, size: Int, waveform: List<Int>): kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.buildJsonObject {
+    put("duration_ms", kotlinx.serialization.json.JsonPrimitive(durationMs))
+    put("content_type", kotlinx.serialization.json.JsonPrimitive("audio/mp4"))
+    put("size", kotlinx.serialization.json.JsonPrimitive(size))
+    put("waveform", kotlinx.serialization.json.JsonArray(waveform.map { kotlinx.serialization.json.JsonPrimitive(it) }))
 }
 
 /** 进场弹簧：[active] 变真后等 [delayMs] 再弹到 1；退场快速收回 */
@@ -519,7 +532,7 @@ private fun BreathingDot(cancel: Boolean) {
 
 /** 实时波形：最新的一根在最右，两次采样之间按帧平滑左移；最左一根淡出 */
 @Composable
-private fun LiveWave(session: VoiceSession, modifier: Modifier) {
+internal fun LiveWave(session: VoiceSession, modifier: Modifier) {
     Canvas(modifier) {
         val step = size.width / LIVE_BARS
         val bw = 3.dp.toPx()

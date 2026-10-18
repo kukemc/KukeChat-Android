@@ -563,6 +563,20 @@ internal fun MessageBody(
         }
     }
     if (!isVoice && message.content.isNotBlank()) LinkPreviewCards(message)
+    // 领语音红包时说的那段话：气泡下面挂一个小标记，点它打开那个红包
+    if (isVoice) redPacketVoiceOf(message)?.let { packetId ->
+        Row(
+            Modifier
+                .padding(top = 3.dp, start = 4.dp, end = 4.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { callbacks.onOpenRedPacket(message, RedPacketMeta(packetId, "normal", "恭喜发财，大吉大利", 1, voice = true)) }
+                .padding(horizontal = 2.dp, vertical = 1.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            KcIcon(KcIcons.redPacket, tint = colors.subtle, size = 11.dp)
+            Text("领取了语音红包", style = type.caption, color = colors.subtle, modifier = Modifier.padding(start = 3.dp))
+        }
+    }
     }
 }
 

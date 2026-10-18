@@ -176,6 +176,8 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
     val ended = remember(state, tick) { state?.endedStatus }
     val myId = callbacks.myId
     val chainText = state?.chainText ?: meta.chainText
+    val voice = state?.voice ?: meta.voice
+    val voiceText = state?.voiceText ?: meta.voiceText
     val targetId = state?.targetUserId ?: meta.targetUserId
     val targetName = state?.targetName ?: meta.targetName ?: "Ta"
     val toMe = targetId != null && targetId == myId
@@ -190,7 +192,8 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
         ended == "expired" -> "已过期"
         ended == "revoked" -> "已撤回"
         forOthers -> "给 $targetName 的专属红包"
-        toMe -> "给你的专属红包 · 领取"
+        toMe -> if (voice) "给你的专属红包 · 说出口令领取" else "给你的专属红包 · 领取"
+        voice -> "按住说出口令领取"
         else -> "领取红包"
     }
     val press = rememberInteraction()
@@ -229,6 +232,17 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
                     Text(stateText, style = type.caption, color = Color(0xFFFFE9B0).copy(alpha = if (dim) 0.95f else 0.9f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
                 }
             }
+            // 语音红包：要念的口令写在卡片上
+            if (voice && voiceText != null) {
+                Row(
+                    Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(Color.Black.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    KcIcon(KcIcons.mic, tint = Color(0xFFFFD98A), size = 12.dp)
+                    Text("语音", fontSize = 11.sp, fontWeight = FontWeight.W600, color = Color(0xFFFFD98A), modifier = Modifier.padding(start = 2.dp))
+                    Text(voiceText, style = type.caption, color = Color.White.copy(alpha = 0.92f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
+                }
+            }
             // 接龙口令：领了就会以自己的身份发出这句话，先写在卡片上
             if (chainText != null) {
                 Row(
@@ -246,9 +260,9 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KcIcon(KcIcons.redPacket, tint = Color.White.copy(alpha = 0.8f), size = 12.dp)
-            val plain = chainText == null && targetId == null && (state?.kind ?: meta.kind) != "lucky"
+            val plain = chainText == null && !voice && targetId == null && (state?.kind ?: meta.kind) != "lucky"
             Text(
-                if (plain) "KukeChat 红包" else redPacketKindLabel(state?.kind ?: meta.kind, chainText != null, targetId != null),
+                if (plain) "KukeChat 红包" else redPacketKindLabel(state?.kind ?: meta.kind, chainText != null, targetId != null, voice),
                 style = type.caption,
                 color = Color.White.copy(alpha = 0.82f),
                 modifier = Modifier.padding(start = 4.dp).weight(1f),

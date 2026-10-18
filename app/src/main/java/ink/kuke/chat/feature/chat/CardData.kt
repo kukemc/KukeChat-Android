@@ -73,6 +73,9 @@ data class RedPacketMeta(
     val chainText: String? = null,
     val targetUserId: Long? = null,
     val targetName: String? = null,
+    /** 语音红包：领的人要按住说出 [voiceText]（服务端 features 带 voice 时才有） */
+    val voice: Boolean = false,
+    val voiceText: String? = null,
 ) {
     val exclusive: Boolean get() = targetUserId != null
 
@@ -91,14 +94,21 @@ fun redPacketMetaOf(message: Message): RedPacketMeta? {
         chainText = packet.s("chain_text")?.takeIf { it.isNotBlank() },
         targetUserId = packet.l("target_user_id") ?: target?.l("id"),
         targetName = target?.let(::displayName),
+        voice = packet.b("voice") == true || !packet.s("voice_text").isNullOrBlank(),
+        voiceText = packet.s("voice_text")?.takeIf { it.isNotBlank() },
     )
 }
+
+/** 语音红包领取时以领取人身份发出的那条语音：metadata.red_packet_voice.red_packet_id */
+fun redPacketVoiceOf(message: Message): Long? = message.metadata?.o("red_packet_voice")?.l("red_packet_id")
 
 /** 接龙红包领取时自动发出的那条文字消息：metadata.red_packet_chain.red_packet_id（docs/red-packets.md 3.6.1） */
 fun redPacketChainOf(message: Message): Long? = message.metadata?.o("red_packet_chain")?.l("red_packet_id")
 
 /** 红包的玩法名：普通 / 拼手气之外，接龙、专属、专属接龙 */
-fun redPacketKindLabel(kind: String, chain: Boolean, exclusive: Boolean): String = when {
+fun redPacketKindLabel(kind: String, chain: Boolean, exclusive: Boolean, voice: Boolean = false): String = when {
+    exclusive && voice -> "专属语音红包"
+    voice -> if (kind == "lucky") "拼手气语音红包" else "语音红包"
     exclusive && chain -> "专属接龙红包"
     exclusive -> "专属红包"
     chain -> if (kind == "lucky") "拼手气接龙红包" else "接龙红包"
@@ -132,6 +142,8 @@ data class RedPacketState(
     val targetUserId: Long? = null,
     val targetName: String? = null,
     val targetAvatar: String? = null,
+    val voice: Boolean = false,
+    val voiceText: String? = null,
 ) {
     val exclusive: Boolean get() = targetUserId != null
     fun forOthers(myId: Long?): Boolean = targetUserId != null && targetUserId != myId
@@ -216,6 +228,8 @@ fun parseRedPacket(obj: JsonObject): RedPacketState? {
         targetUserId = obj.l("target_user_id") ?: obj.o("target")?.l("id"),
         targetName = obj.o("target")?.let(::displayName),
         targetAvatar = obj.o("target")?.s("avatar_url"),
+        voice = obj.b("voice") == true,
+        voiceText = obj.s("voice_text")?.takeIf { it.isNotBlank() },
     )
 }
 

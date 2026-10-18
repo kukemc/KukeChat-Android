@@ -17,7 +17,11 @@ fun messagePreview(message: Message): String {
             val packet = meta?.get("red_packet") as? JsonObject
             val chain = (packet?.get("chain_text") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.isNotBlank() == true
             val exclusive = (packet?.get("target_user_id") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() != null
+            val voice = (packet?.get("voice") as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true ||
+                (packet?.get("voice_text") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.isNotBlank() == true
             when {
+                exclusive && voice -> "[专属语音红包]"
+                voice -> "[语音红包]"
                 exclusive && chain -> "[专属接龙红包]"
                 exclusive -> "[专属红包]"
                 chain -> "[接龙红包]"
