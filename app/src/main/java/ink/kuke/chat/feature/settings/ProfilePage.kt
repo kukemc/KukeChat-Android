@@ -93,9 +93,10 @@ private data class ProfileDraft(
 
 private val Layouts = listOf("classic" to "经典", "banner" to "沉浸封面", "compact" to "紧凑")
 private val CardStyles = listOf("soft" to "柔和", "glass" to "玻璃", "solid" to "纯色")
+private val HexColor = Regex("#[0-9a-fA-F]{6}")
 private val ProfileAccents = listOf("#168bff", "#7c3aed", "#ff4f86", "#f97316", "#10b981", "#111827")
 
-/** 设置 › 我的资料：头像、昵称、简介、个人主页自定义、生日 */
+/** 设置 › 我的资料：头像、昵称、简介、个人主页自定义；在线状态、戳一戳、生日各自单独保存；复制主页链接 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfilePage(graph: AppGraph) {
@@ -115,7 +116,12 @@ private fun ProfileForm(graph: AppGraph, profile: MyProfile, toast: ToastState, 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val original = remember(profile) { ProfileDraft.from(profile) }
-    var draft by remember(profile) { mutableStateOf(original) }
+    // 按草稿的值（而不是 profile 对象）做 key：在线状态、戳一戳单独保存后 profile 会换新，资料字段没变时不冲掉正在改的内容
+    var draft by remember(original) { mutableStateOf(original) }
+    var customAccent by remember { mutableStateOf(false) }
+    var accentInput by remember(original) { mutableStateOf(original.accent) }
+    var showPresence by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     val dirty = draft != original
@@ -226,10 +232,35 @@ private fun ProfileForm(graph: AppGraph, profile: MyProfile, toast: ToastState, 
                         val color = Color(android.graphics.Color.parseColor(hexColor))
                         val on = draft.accent.equals(hexColor, ignoreCase = true)
                         Box(
-                            Modifier.size(32.dp).clip(CircleShape).background(color).clickable { draft = draft.copy(accent = hexColor) },
+                            Modifier.size(32.dp).clip(CircleShape).background(color).clickable { draft = draft.copy(accent = hexColor); accentInput = hexColor; customAccent = false },
                             contentAlignment = Alignment.Center,
                         ) { if (on) KcIcon(KcIcons.check, tint = Color.White, size = 18.dp) }
                     }
+                    // 自定义：同电脑版的取色器，这里填十六进制色值
+                    val custom = ProfileAccents.none { it.equals(draft.accent, ignoreCase = true) }
+                    Box(
+                        Modifier.size(32.dp).clip(CircleShape)
+                            .background(if (custom) Color(android.graphics.Color.parseColor(draft.accent)) else colors.panelMuted)
+                            .clickable { customAccent = !customAccent },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (custom) KcIcon(KcIcons.check, tint = Color.White, size = 18.dp)
+                        else KcIcon(KcIcons.palette, tint = colors.muted, size = 16.dp)
+                    }
+                }
+                if (customAccent) {
+                    Spacer(Modifier.height(10.dp))
+                    KcTextField(
+                        accentInput,
+                        { value ->
+                            val next = value.trim().let { if (it.isNotEmpty() && !it.startsWith("#")) "#$it" else it }
+                            accentInput = next
+                            if (next.matches(HexColor)) draft = draft.copy(accent = next.lowercase())
+                        },
+                        hint = "#168bff",
+                        maxLength = 7,
+                    )
+                    Text("填 6 位十六进制色值，例如 #168bff", style = type.caption, color = colors.subtle, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }
@@ -238,8 +269,62 @@ private fun ProfileForm(graph: AppGraph, profile: MyProfile, toast: ToastState, 
             PrimaryButton(if (saving) "保存中…" else "保存资料", onClick = ::save, enabled = dirty && !uploading, loading = saving, modifier = Modifier.fillMaxWidth())
         }
 
+        GroupLabel("在线状态")
+        GroupCard {
+            SettingsRow(
+                "在线状态", icon = KcIcons.circleDot,
+                subtitle = "别人在聊天列表和资料卡上看到的状态，修改后立即生效",
+                value = ink.kuke.chat.feature.space.presenceLabel(profile.presenceStatus, profile.presenceText),
+                onClick = { showPresence = true },
+            )
+        }
+
+        GroupLabel("戳一戳")
+        PokeCard(graph, profile, onSaved)
+
         GroupLabel("生日")
         BirthdayCard(graph, toast)
+
+        GroupLabel("分享")
+        GroupCard {
+            SettingsRow(
+                if (sharing) "正在生成链接…" else "复制个人主页链接", icon = KcIcons.link,
+                subtitle = "别人打开链接就能看到你的主页、加你好友",
+                chevron = false,
+                onClick = {
+                    if (!sharing) scope.launch {
+                        sharing = true
+                        runCatching { (graph.api.post("/invites/user/${profile.id}") as? JsonObject)?.string("url") ?: error("分享链接生成失败") }
+                            .onSuccess { url -> context.copyToClipboard("个人主页链接", url); toast.show("已复制主页链接", scope) }
+                            .onFailure { toast.show(it.userMessage(), scope) }
+                        sharing = false
+                    }
+                },
+            )
+        }
+    }
+
+    if (showPresence) {
+        ink.kuke.chat.feature.space.PresenceSheet(
+            current = profile.presenceStatus ?: "online",
+            currentText = profile.presenceText.orEmpty(),
+            onDismiss = { showPresence = false },
+            onPick = { status, text ->
+                showPresence = false
+                scope.launch {
+                    runCatching {
+                        graph.api.patch("/users/me/presence", buildJsonObject {
+                            put("presence_status", status)
+                            if (text.isNotBlank()) put("presence_text", text.trim())
+                        })
+                    }.onSuccess { element ->
+                        runCatching { onSaved(KcJson.decodeFromJsonElement(MyProfile.serializer(), element)) }
+                        runCatching { graph.session.updateUser(KcJson.decodeFromJsonElement(User.serializer(), element)) }
+                        toast.show("在线状态已更新", scope)
+                    }.onFailure { toast.show(it.userMessage(), scope) }
+                }
+            },
+        )
     }
 }
 

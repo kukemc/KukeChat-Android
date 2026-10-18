@@ -49,6 +49,11 @@ data class MyProfile(
     @SerialName("profile_cover_url") val profileCoverUrl: String? = null,
     @SerialName("profile_cover_pending_url") val profileCoverPendingUrl: String? = null,
     @SerialName("share_typing") val shareTyping: Boolean = true,
+    @SerialName("presence_status") val presenceStatus: String? = null,
+    @SerialName("presence_text") val presenceText: String? = null,
+    /** 别人戳我时的动作和后缀（docs/chat-features.md）；旧后端没有这两项 */
+    @SerialName("poke_action") val pokeAction: String? = null,
+    @SerialName("poke_suffix") val pokeSuffix: String? = null,
     @SerialName("ccw_student_oid") val ccwStudentOid: String? = null,
     @SerialName("ccw_name") val ccwName: String? = null,
     @SerialName("ccw_avatar_url") val ccwAvatarUrl: String? = null,

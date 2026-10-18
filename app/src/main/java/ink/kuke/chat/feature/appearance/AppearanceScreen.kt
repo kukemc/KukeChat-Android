@@ -53,6 +53,10 @@ import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.feature.settings.GroupCard
 import ink.kuke.chat.feature.settings.GroupLabel
 import ink.kuke.chat.feature.settings.Segmented
+import ink.kuke.chat.feature.settings.SettingsRow
+import ink.kuke.chat.feature.settings.SwitchRow
+import ink.kuke.chat.feature.shop.ShopPrefs
+import androidx.compose.ui.platform.LocalContext
 import ink.kuke.chat.ui.components.KcPage
 import ink.kuke.chat.ui.icons.KcIcon
 import ink.kuke.chat.ui.icons.KcIcons
@@ -66,12 +70,12 @@ import ink.kuke.chat.ui.theme.KcTheme
 @Composable
 fun AppearanceScreen(graph: AppGraph, store: AppearanceStore) {
     val nav = LocalAppNav.current
-    AppearanceContent(store = store, onBack = { nav.back() })
+    AppearanceContent(store = store, onBack = { nav.back() }, onOpenShop = { nav.go(ink.kuke.chat.ui.shell.ShopRoute) })
 }
 
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun AppearanceContent(store: AppearanceStore, onBack: () -> Unit) {
+fun AppearanceContent(store: AppearanceStore, onBack: () -> Unit, onOpenShop: (() -> Unit)? = null) {
     val appearance by store.state.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
     val resolved = remember(appearance, systemDark) { appearance.resolve(systemDark) }
@@ -202,6 +206,23 @@ fun AppearanceContent(store: AppearanceStore, onBack: () -> Unit) {
                     MiniSegmented(listOf("小", "较小", "标准", "稍大", "大"), appearance.fontIndex, compact = true) { i -> store.update { it.copy(fontIndex = i) } }
                     Text("A", color = colors.muted, fontSize = 17.sp, modifier = Modifier.padding(start = 4.dp))
                 }
+            }
+
+            // 气泡皮肤（同电脑版外观页的「气泡皮肤」卡）：商店入口 + 看不看别人的皮肤，后者只存在这台手机上
+            GroupLabel("气泡皮肤")
+            GroupCard {
+                if (onOpenShop != null) {
+                    SettingsRow("商店与我的装扮", icon = KcIcons.store, subtitle = "用 CCW 金币换气泡和头像框", onClick = onOpenShop)
+                    RowDivider()
+                }
+                val context = LocalContext.current
+                SwitchRow(
+                    "显示别人的气泡皮肤",
+                    checked = ShopPrefs.showOthersSkins(context),
+                    onChange = { ShopPrefs.setShowOthersSkins(context, it) },
+                    subtitle = "关掉后，别人的气泡按你的主题显示；你自己的皮肤不受影响",
+                    icon = KcIcons.eye,
+                )
             }
         }
     }

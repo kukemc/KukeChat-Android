@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.model.User
 import ink.kuke.chat.core.net.KcJson
@@ -100,11 +101,13 @@ fun rememberAvatarFrame(userId: Long?, payload: JsonObject?): AvatarFrame? {
     return remember(cosmetics) { Cosmetics.frame(cosmetics) }
 }
 
-/** 这个人装备的气泡皮肤（没有 / 画不出为 null） */
+/** 这个人装备的气泡皮肤（没有 / 画不出为 null）。关掉了「显示别人的气泡皮肤」时，别人的一律为 null，自己的照常 */
 @Composable
 fun rememberBubbleSkin(userId: Long?, payload: JsonObject?): BubbleSkin? {
     val cosmetics = Cosmetics.of(userId, payload)
-    return remember(cosmetics) { Cosmetics.bubble(cosmetics) }
+    val skin = remember(cosmetics) { Cosmetics.bubble(cosmetics) }
+    val mine = userId != null && userId != 0L && userId == Cosmetics.myId
+    return if (mine || ShopPrefs.showOthersSkins(LocalContext.current)) skin else null
 }
 
 /**
