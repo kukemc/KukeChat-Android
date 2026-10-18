@@ -63,3 +63,8 @@ val LocalAppNav = compositionLocalOf<AppNav> { error("LocalAppNav 没有提供�
 @Serializable data class InviteRoute(val token: String)
 /** 某个群的任务列表（聊天顶栏「群任务」） */
 @Serializable data class GroupTasksRoute(val conversationId: Long)
+/** 群公告（feature/groupannouncement）：列表、详情、发布 / 编辑（announcementId = 0 是新发布）、确认统计 */
+@Serializable data class GroupAnnouncementsRoute(val conversationId: Long)
+@Serializable data class GroupAnnouncementRoute(val conversationId: Long, val announcementId: Long)
+@Serializable data class GroupAnnouncementEditRoute(val conversationId: Long, val announcementId: Long = 0)
+@Serializable data class GroupAnnouncementConfirmsRoute(val conversationId: Long, val announcementId: Long)

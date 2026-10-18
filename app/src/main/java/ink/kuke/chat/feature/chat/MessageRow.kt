@@ -176,6 +176,13 @@ fun MessageRow(
         }
     }
 
+    // 群公告卡片（system 消息，metadata.system_event = group.announcement.card）：画成卡片、点开公告详情；和别的系统消息一样没有长按菜单，不能转发、不进多选
+    if (message.type == "system" && !message.isRecalled) {
+        ink.kuke.chat.feature.groupannouncement.announcementCardOf(message)?.let { card ->
+            ink.kuke.chat.feature.groupannouncement.AnnouncementCard(message, card, flashModifier)
+            return
+        }
+    }
     if (message.type == "system" || message.isRecalled) {
         Box(Modifier.fillMaxWidth().then(flashModifier).padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
             Text(

@@ -158,6 +158,8 @@ fun MainShell(graph: AppGraph, openConversationId: Long?, onConsumedOpen: () -> 
 
     LaunchedEffect(Unit) {
         IntimacyCache.start(graph)
+        // 群公告的实时事件（删除后聊天里的公告卡片变灰、弹窗重拉）
+        ink.kuke.chat.feature.groupannouncement.AnnouncementHub.start(graph)
         if (!keepAliveShown && !KeepAlive.ready(context)) {
             keepAliveShown = true
             nav.navigate(KeepAliveRoute)
@@ -251,6 +253,20 @@ fun MainShell(graph: AppGraph, openConversationId: Long?, onConsumedOpen: () -> 
             page<TasksRoute> { TasksScreen(graph) }
             page<TaskRoute> { TaskScreen(graph, it.toRoute<TaskRoute>().taskId) }
             page<GroupTasksRoute> { ink.kuke.chat.feature.tasks.GroupTasksScreen(graph, it.toRoute<GroupTasksRoute>().conversationId) }
+            // 群公告：列表 · 详情 · 发布 / 编辑 · 确认统计
+            page<GroupAnnouncementsRoute> { ink.kuke.chat.feature.groupannouncement.AnnouncementListScreen(graph, it.toRoute<GroupAnnouncementsRoute>().conversationId) }
+            page<GroupAnnouncementRoute> {
+                val route = it.toRoute<GroupAnnouncementRoute>()
+                ink.kuke.chat.feature.groupannouncement.AnnouncementDetailScreen(graph, route.conversationId, route.announcementId)
+            }
+            page<GroupAnnouncementEditRoute> {
+                val route = it.toRoute<GroupAnnouncementEditRoute>()
+                ink.kuke.chat.feature.groupannouncement.AnnouncementEditorScreen(graph, route.conversationId, route.announcementId)
+            }
+            page<GroupAnnouncementConfirmsRoute> {
+                val route = it.toRoute<GroupAnnouncementConfirmsRoute>()
+                ink.kuke.chat.feature.groupannouncement.AnnouncementConfirmsScreen(graph, route.conversationId, route.announcementId)
+            }
             page<InviteRoute> { ink.kuke.chat.feature.invite.InviteScreen(graph, it.toRoute<InviteRoute>().token) }
             page<BotsRoute> { BotsScreen(graph) }
             page<BotRoute> { BotScreen(graph, it.toRoute<BotRoute>().botId) }

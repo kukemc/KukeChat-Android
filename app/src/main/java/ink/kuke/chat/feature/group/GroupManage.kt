@@ -3,7 +3,6 @@ package ink.kuke.chat.feature.group
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,8 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.net.userMessage
-import ink.kuke.chat.core.ui.parseInstant
-import ink.kuke.chat.feature.chat.KcButton
 import ink.kuke.chat.feature.chat.KcConfirm
 import ink.kuke.chat.feature.chat.KcSheet
 import ink.kuke.chat.feature.chat.KcTextField
@@ -53,11 +50,7 @@ import ink.kuke.chat.ui.theme.KcTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.net.URLEncoder
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 private const val PAGE = 30
 
@@ -180,91 +173,6 @@ private fun RoleTag(text: String, color: androidx.compose.ui.graphics.Color) {
     )
 }
 
-private val dateFormat = DateTimeFormatter.ofPattern("MM-dd HH:mm")
-
-private fun shortTime(iso: String?): String = parseInstant(iso)?.atZone(ZoneId.systemDefault())?.format(dateFormat).orEmpty()
-
-/** 群公告：列表（GET /conversations/{id}/announcements）；群主 / 管理员可以发布、删除 */
-@Composable
-internal fun AnnouncementsSheet(graph: AppGraph, conversationId: Long, canManage: Boolean, onDismiss: () -> Unit) {
-    val colors = KcTheme.colors
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<JsonObject>?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var attempt by remember { mutableStateOf(0) }
-    var draft by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf<JsonObject?>(null) }
-
-    LaunchedEffect(attempt) {
-        error = null
-        runCatching { graph.api.get("/conversations/$conversationId/announcements").asArr().orEmpty().mapNotNull { it.asObj() } }
-            .onSuccess { items = it }
-            .onFailure { error = it.userMessage() }
-    }
-
-    KcSheet(onDismiss = onDismiss, title = "群公告", maxHeight = 620.dp) {
-        if (canManage) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                KcTextField(draft, { if (it.length <= 500) draft = it }, "发布新公告（最多 500 字）", singleLine = false, minHeight = 80.dp)
-                KcButton(if (busy) "发布中…" else "发布公告", {
-                    busy = true
-                    scope.launch {
-                        runCatching { graph.api.post("/conversations/$conversationId/announcements", buildJsonObject { put("content", draft.trim()) }) }
-                            .onSuccess {
-                                draft = ""
-                                graph.conversations.refreshSoon(0)
-                                attempt++
-                            }
-                            .onFailure { toast(context, it.userMessage()) }
-                        busy = false
-                    }
-                }, enabled = draft.isNotBlank() && !busy, modifier = Modifier.fillMaxWidth())
-            }
-        }
-        val list = items
-        Box(Modifier.heightIn(min = 120.dp, max = 400.dp).padding(top = 8.dp)) {
-            when {
-                error != null -> StateText(error!!, error = true, onRetry = { attempt++ })
-                list == null -> StateText("加载中…")
-                list.isEmpty() -> StateText("还没有公告")
-                else -> LazyColumn {
-                    items(list, key = { it.l("id") ?: it.hashCode().toLong() }) { item ->
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(item.s("content").orEmpty(), style = KcTheme.type.body, color = colors.text)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                val author = item.asObj()?.get("author")?.asObj()
-                                Text(
-                                    listOfNotNull(author?.s("nickname") ?: author?.s("username"), shortTime(item.s("created_at"))).filter { it.isNotBlank() }.joinToString(" · "),
-                                    style = KcTheme.type.caption,
-                                    color = colors.subtle,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (canManage) Text("删除", style = KcTheme.type.caption, color = colors.danger, modifier = Modifier.clickable { deleting = item }.padding(4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    deleting?.let { item ->
-        KcConfirm("删除公告", "删除后所有成员都看不到这条公告。", "删除", danger = true, onConfirm = {
-            deleting = null
-            val id = item.l("id") ?: return@KcConfirm
-            scope.launch {
-                runCatching { graph.api.delete("/conversations/$conversationId/announcements/$id") }
-                    .onSuccess {
-                        graph.conversations.refreshSoon(0)
-                        attempt++
-                    }
-                    .onFailure { toast(context, it.userMessage()) }
-            }
-        }, onDismiss = { deleting = null })
-    }
-}
 
 /** 入群申请：GET /conversations/join-requests/incoming 里属于这个群的待处理项；同意 / 拒绝 */
 @Composable

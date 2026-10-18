@@ -91,7 +91,6 @@ fun GroupInfoScreen(graph: AppGraph, conversationId: Long) {
 
 private sealed interface Sub {
     data object Members : Sub
-    data object Announcements : Sub
     data object JoinRequests : Sub
     data object EditName : Sub
     data object EditDescription : Sub
@@ -212,6 +211,13 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                 // 群表情：全员可看，群主 / 管理员维护
                 GroupEmojiEntry(graph, extras, manager = detail.manager)
 
+                // 群公告：全员可看；群主 / 管理员在列表右上角发布
+                Card {
+                    GroupRow(KcIcons.announcement, "群公告", liveConversation?.announcement?.takeIf { it.isNotBlank() } ?: if (detail.manager) "发布公告" else "暂无") {
+                        nav.go(ink.kuke.chat.ui.shell.GroupAnnouncementsRoute(conversationId))
+                    }
+                }
+
                 // 资料管理
                 if (detail.manager) {
                     Card {
@@ -219,7 +225,6 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                             GroupRow(KcIcons.edit, "群名称", detail.title) { sub = Sub.EditName }
                             GroupRow(KcIcons.info, "群简介", detail.description.ifBlank { "未设置" }) { sub = Sub.EditDescription }
                             GroupRow(KcIcons.layoutGrid, "群分类", detail.category?.takeIf { it.isNotBlank() } ?: "未设置") { extras.sheet = GroupExtra.Category }
-                            GroupRow(KcIcons.announcement, "群公告", "管理") { sub = Sub.Announcements }
                             GroupRow(KcIcons.userPlus, "入群申请", if (detail.pendingRequests > 0) "${detail.pendingRequests} 条待处理" else "无", highlight = detail.pendingRequests > 0) { sub = Sub.JoinRequests }
                             SwitchRow(KcIcons.award, "显示等级头衔", detail.levelTitlesEnabled, hint = detail.levelTitles.takeIf { it.isNotEmpty() }?.joinToString(" · ") { "LV${it.first}+${it.second}" }) { on ->
                                 model.patch("/settings", buildJsonObject { put("level_titles_enabled", on) }, ::say)
@@ -326,7 +331,6 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                 onMemberClick = onMemberClick,
                 onRemoved = { model.reload(quiet = true) },
             )
-            Sub.Announcements -> AnnouncementsSheet(graph, conversationId, canManage = detail?.manager == true, onDismiss = { sub = null })
             Sub.JoinRequests -> JoinRequestsSheet(graph, conversationId, onDismiss = { sub = null }, onChanged = { model.reload(quiet = true) })
             Sub.EditName -> TextEditSheet("群名称", detail?.title.orEmpty(), "群名称", 30, singleLine = true, onDismiss = { sub = null }) { text ->
                 model.patch("/profile", buildJsonObject { put("title", text) }, ::say)
