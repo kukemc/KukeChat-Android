@@ -313,7 +313,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         GroupIdentity(roles, if (conversation?.levelTitlesEnabled == true) conversation.levelTitles.orEmpty() else emptyList())
     }
 
-    val callbacks = remember(controller, staff, me?.id, isGroup) {
+    // 机器人的头像 / 名字：不弹用户名片，直接进机器人详情
+    val openBot = ink.kuke.chat.feature.bots.rememberOpenBotForUser(graph)
+    val callbacks = remember(controller, staff, me?.id, isGroup, openBot) {
         MessageCallbacks(
             onLongPress = {
                 // 输入法还开着时，操作菜单会被键盘盖住：先收起键盘、取消输入框焦点
@@ -337,7 +339,10 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             onReaction = controller::toggleReaction,
             // 点头像：用户名片由 feature/user 提供，这里先进用户主页
             // 设计稿 P30：点头像弹底部用户名片（名片里有「个人主页」入口），不再整页跳走
-            onAvatar = { message -> message.senderId?.let { cardUserId = it } },
+            onAvatar = { message ->
+                val id = message.senderId
+                if (id != null && id != me?.id && message.sender?.isBot == true) openBot(id) else id?.let { cardUserId = it }
+            },
             onJumpToQuote = { id -> jumpTo(id) },
             onAvatarDoubleTap = { message -> message.senderId?.takeIf { it != me?.id }?.let(controller::poke) },
             onVote = { message, poll, ids -> controller.vote(message, poll.id, ids) },
@@ -415,7 +420,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                         }
                     }
                 }.swipeBackGesture(onSwipeLeft = {
-                    if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { nav.go(UserRoute(it.id)) }
+                    if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { if (it.isBot) openBot(it.id) else nav.go(UserRoute(it.id)) }
                 }),
             ) {
                 // 倒排（最新在前）：本地消息（发送中 / 失败）排在所有服务端消息之后。
@@ -685,7 +690,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             "plus" -> nav.go(GroupPlusRoute(conversationId))
                             "featured" -> overlay = Overlay.Featured
                             "bookmarks" -> overlay = Overlay.Bookmarks
-                            "info" -> if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { nav.go(UserRoute(it.id)) }
+                            "info" -> if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { if (it.isBot) openBot(it.id) else nav.go(UserRoute(it.id)) }
                             "intimacy" -> conversation?.directUser?.let { nav.go(ink.kuke.chat.ui.shell.IntimacyRoute(it.id)) }
                             "clear" -> overlay = Overlay.ConfirmClear
                             "report" -> overlay = Overlay.Report(reportTargetFor(conversation, conversationId, controller, me?.id))

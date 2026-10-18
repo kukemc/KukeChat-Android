@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ink.kuke.chat.core.AppGraph
+import ink.kuke.chat.feature.bots.rememberOpenBotForUser
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.feature.chat.ChatController
 import ink.kuke.chat.feature.chat.Chip
@@ -110,6 +111,7 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val model = remember(conversationId) { GroupModel(graph, conversationId, scope) }
+    val openBot = rememberOpenBotForUser(graph)
     val nav = LocalAppNav.current
     // 群升级档位（实时：group.* 事件会让会话列表刷新）
     val liveConversation = graph.conversations.items.collectAsStateWithLifecycle().value.firstOrNull { it.id == conversationId }
@@ -188,7 +190,8 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                             horizontalArrangement = Arrangement.SpaceBetween,
                             maxItemsInEachRow = 5,
                         ) {
-                            preview.forEach { member -> MemberTile(member) { onMemberClick(member.userId) } }
+                            // 成员里的机器人点了直接进机器人详情
+                            preview.forEach { member -> MemberTile(member) { if (member.isBot) openBot(member.userId) else onMemberClick(member.userId) } }
                             // 末尾的「邀请 / 移除」虚线位
                             DashedTile("邀请", KcIcons.plus) {
                                 // 群主 / 管理员：从好友里拉人；普通成员：复制邀请链接

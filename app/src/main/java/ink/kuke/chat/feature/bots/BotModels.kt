@@ -146,6 +146,8 @@ internal class BotApi(private val api: Api) {
 
     suspend fun mine(): List<Bot> = list(api.get("/bots/mine"), Bot.serializer())
     suspend fun bot(id: Long): Bot = KcJson.decodeFromJsonElement(Bot.serializer(), api.get("/bots/$id"))
+    /** 按机器人的用户账号（users.is_bot）取机器人：聊天里点机器人头像 / 名字时用它换 bot_id */
+    suspend fun botByUser(userId: Long): Bot = KcJson.decodeFromJsonElement(Bot.serializer(), api.get("/bots/by-user/$userId"))
     suspend fun dashboard(id: Long): BotDashboard = KcJson.decodeFromJsonElement(BotDashboard.serializer(), api.get("/bots/$id/dashboard"))
     suspend fun reviews(id: Long): List<BotReview> = list(api.get("/bots/$id/reviews"), BotReview.serializer())
 

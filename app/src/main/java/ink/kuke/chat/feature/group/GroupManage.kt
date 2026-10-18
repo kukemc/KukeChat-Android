@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ink.kuke.chat.core.AppGraph
+import ink.kuke.chat.feature.bots.rememberOpenBotForUser
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.feature.chat.KcConfirm
 import ink.kuke.chat.feature.chat.KcSheet
@@ -70,6 +71,7 @@ internal fun MembersPage(
 ) {
     val colors = KcTheme.colors
     val context = LocalContext.current
+    val openBot = rememberOpenBotForUser(graph)
     val scope = rememberCoroutineScope()
     val members = remember { mutableStateListOf<MemberLite>() }
     var query by remember { mutableStateOf("") }
@@ -119,7 +121,8 @@ internal fun MembersPage(
                 else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                     items(members, key = { it.userId }) { member ->
                         Row(
-                            Modifier.fillMaxWidth().clickable { onMemberClick(member.userId) }.padding(horizontal = 16.dp, vertical = 8.dp),
+                            // 成员里的机器人点了直接进机器人详情
+                            Modifier.fillMaxWidth().clickable { if (member.isBot) openBot(member.userId) else onMemberClick(member.userId) }.padding(horizontal = 16.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Avatar(member.avatarUrl, member.name, tone = member.userId, size = 44.dp)

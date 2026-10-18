@@ -75,6 +75,7 @@ fun UserCardSheet(graph: AppGraph, userId: Long, conversationId: Long?, onDismis
     val nav = LocalAppNav.current
     val scope = rememberCoroutineScope()
     val api = remember(graph) { UserApi(graph.api) }
+    val openBot = ink.kuke.chat.feature.bots.rememberOpenBotForUser(graph)
     val social = remember(graph) { SocialApi(graph.api) }
     val me = graph.session.session.value?.user
     val isSelf = me?.id == userId
@@ -248,15 +249,15 @@ fun UserCardSheet(graph: AppGraph, userId: Long, conversationId: Long?, onDismis
                     }
                     Spacer(Modifier.height(12.dp))
 
-                    // 基础操作：个人主页（描边）+ 发消息（主色）
+                    // 基础操作：个人主页（描边）+ 发消息（主色）；机器人的「个人主页」换成它的机器人详情
                     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             Modifier.height(42.dp).clip(RoundedCornerShape(12.dp)).background(colors.panel).border(1.dp, colors.borderStrong, RoundedCornerShape(12.dp))
-                                .clickable { onDismiss(); nav.go(UserRoute(userId)) }.padding(horizontal = 18.dp),
+                                .clickable { onDismiss(); if (p.isBot) openBot(userId) else nav.go(UserRoute(userId)) }.padding(horizontal = 18.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            KcIcon(KcIcons.home, tint = colors.text, size = 18.dp)
-                            Text("个人主页", style = type.rowTitle, color = colors.text, fontWeight = FontWeight.W700, modifier = Modifier.padding(start = 8.dp))
+                            KcIcon(if (p.isBot) KcIcons.bot else KcIcons.home, tint = colors.text, size = 18.dp)
+                            Text(if (p.isBot) "查看机器人" else "个人主页", style = type.rowTitle, color = colors.text, fontWeight = FontWeight.W700, modifier = Modifier.padding(start = 8.dp))
                         }
                         if (!isSelf) {
                             Row(

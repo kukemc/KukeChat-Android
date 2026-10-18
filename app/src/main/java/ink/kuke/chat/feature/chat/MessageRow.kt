@@ -281,7 +281,8 @@ fun MessageRow(
                     },
             ) {
                 // 群聊里自己的消息也显示身份标签和名字（同电脑版 / QQ，跟着气泡靠右）；私聊两边都不显示（showName = 是否群聊）
-                if (showName) NameLine(message, isGroup, identity, me)
+                // 机器人的名字点了和点头像一样（聊天页把机器人转到机器人详情）
+                if (showName) NameLine(message, isGroup, identity, me, onBotName = if (!mine && !selecting && message.sender?.isBot == true) ({ callbacks.onAvatar(message) }) else null)
                 Box(
                     Modifier.pointerInput(message.id, selecting) {
                         if (selecting) return@pointerInput
@@ -339,7 +340,7 @@ private fun levelTitleOf(level: Int?, tiers: List<ink.kuke.chat.core.model.Level
 }
 
 @Composable
-private fun NameLine(message: Message, isGroup: Boolean, identity: GroupIdentity?, me: ink.kuke.chat.core.model.User? = null) {
+private fun NameLine(message: Message, isGroup: Boolean, identity: GroupIdentity?, me: ink.kuke.chat.core.model.User? = null, onBotName: (() -> Unit)? = null) {
     val colors = KcTheme.colors
     val type = KcTheme.type
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 3.dp)) {
@@ -366,7 +367,11 @@ private fun NameLine(message: Message, isGroup: Boolean, identity: GroupIdentity
         }
         // 自己刚发出、还没回来的消息没有 sender：名字用当前登录用户的
         val name = if (message.sender == null && message.senderDisplayName.isNullOrBlank() && me != null) me.displayName else message.senderName
-        Text(name, style = type.caption, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 5.dp).widthIn(max = 160.dp))
+        Text(
+            name, style = type.caption, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 5.dp).widthIn(max = 160.dp)
+                .then(if (onBotName != null) Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onBotName) else Modifier),
+        )
         // 群聊里我的好友：名字后挂好友徽章（同电脑版；不是好友 / 未开放时什么也不画）
         if (isGroup && message.sender?.isBot != true && (me == null || message.senderId != me.id)) {
             ink.kuke.chat.feature.user.FriendBadgeMark(message.senderId, size = 14.dp, modifier = Modifier.padding(start = 4.dp))

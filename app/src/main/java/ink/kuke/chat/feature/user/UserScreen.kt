@@ -112,6 +112,7 @@ fun UserScreen(graph: AppGraph, userId: Long) {
     var pulse by remember { mutableIntStateOf(0) }
     var showReport by remember { mutableStateOf(false) }
     var showGift by remember { mutableStateOf(false) }
+    val openBot = ink.kuke.chat.feature.bots.rememberOpenBotForUser(graph)
     // 礼物：开关和「心意值」的叫法看目录；心意值以送礼回包 / 收礼事件里的最新值为准
     val giftCatalog by Gifts.catalog.collectAsStateWithLifecycle()
     val liveCharm by Gifts.charm.collectAsStateWithLifecycle()
@@ -211,11 +212,14 @@ fun UserScreen(graph: AppGraph, userId: Long) {
                         if (!isSelf) item(key = "actions") {
                             Column(Modifier.fillMaxWidth().background(colors.panel).padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                    ActionTile(
+                                    // 机器人加不了好友：这一格换成「查看机器人」，进它的机器人详情
+                                    if (p.isBot) {
+                                        ActionTile(KcIcons.bot, "查看机器人", Modifier.weight(1f)) { openBot(userId) }
+                                    } else ActionTile(
                                         KcIcons.userPlus,
                                         if (isFriend) "已是好友" else if (isPending) "已申请" else "加好友",
                                         Modifier.weight(1f),
-                                        enabled = !isFriend && !isPending && !p.isBot,
+                                        enabled = !isFriend && !isPending,
                                     ) {
                                         scope.launch {
                                             runCatching { social.sendFriendRequest(userId) }
