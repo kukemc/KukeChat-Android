@@ -3,12 +3,15 @@ package ink.kuke.chat.feature.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,6 +33,8 @@ import ink.kuke.chat.feature.groupfiles.fileIcon
 import ink.kuke.chat.feature.groupfiles.isVideoFile
 import ink.kuke.chat.feature.groupfiles.ratio
 import ink.kuke.chat.feature.groupplus.formatBytes
+import ink.kuke.chat.ui.components.pressScale
+import ink.kuke.chat.ui.components.rememberInteraction
 import ink.kuke.chat.ui.icons.KcIcon
 import ink.kuke.chat.ui.icons.KcIcons
 import ink.kuke.chat.ui.theme.KcTheme
@@ -116,4 +121,76 @@ internal fun MessageFileCard(meta: FileMeta, onClick: () -> Unit) {
             KcProgressBar(download.ratio(meta.size), Modifier.padding(top = 10.dp), height = 3.dp)
         }
     }
+}
+
+/**
+ * 发送中的文件：和文件消息同一张卡片（图标 · 文件名 · 大小），底部画上传进度，右侧 × 取消（取消上传、卡片消失）。
+ * 失败时写明原因，下面「重试」「删除」两个胶囊。传完由服务端落文件消息，这张卡片原地换成它。
+ */
+@Composable
+internal fun PendingFileCard(file: OutgoingFile, failed: Boolean, error: String?, onCancel: () -> Unit, onRetry: () -> Unit) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    val picked = file.picked
+    val progress = file.progress
+    val status = when {
+        failed -> "失败"
+        progress != null && progress >= 1f -> "处理中…"
+        progress != null && file.sent > 0 -> "上传中 ${(progress * 100).toInt()}%"
+        else -> "上传中"
+    }
+    Column(
+        Modifier
+            .widthIn(min = 220.dp, max = 270.dp)
+            .shadow(1.dp, RoundedCornerShape(12.dp))
+            .background(colors.panel, RoundedCornerShape(12.dp))
+            .border(1.dp, (if (failed) colors.danger else colors.accent).copy(alpha = 0.18f), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(colors.accentSoft), contentAlignment = Alignment.Center) {
+                KcIcon(fileIcon(picked.name, picked.mime), tint = if (failed) colors.subtle else colors.accent, size = 22.dp)
+            }
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(picked.name, style = type.rowTitle, color = colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    (if (picked.size >= 0) formatBytes(picked.size) else "未知大小") + " · " + status,
+                    style = type.caption, color = if (failed) colors.danger else colors.muted,
+                )
+            }
+            if (!failed) {
+                val press = rememberInteraction()
+                Box(
+                    Modifier.padding(start = 8.dp).size(26.dp).pressScale(press, 0.9f).clip(CircleShape).background(colors.panelMuted)
+                        .clickable(interactionSource = press, indication = null, onClick = onCancel),
+                    contentAlignment = Alignment.Center,
+                ) { KcIcon(KcIcons.close, tint = colors.muted, size = 14.dp, contentDescription = "取消发送") }
+            }
+        }
+        if (failed) {
+            error?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = type.caption, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+            }
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FileCapsule("重试", ink = true, onClick = onRetry)
+                FileCapsule("删除", ink = false, onClick = onCancel)
+            }
+        } else {
+            KcProgressBar(progress?.takeIf { file.sent > 0 }, Modifier.padding(top = 10.dp), height = 3.dp)
+        }
+    }
+}
+
+/** 卡片里的小胶囊按钮：ink = 墨色实心（主操作），否则浅灰底 */
+@Composable
+private fun FileCapsule(label: String, ink: Boolean, onClick: () -> Unit) {
+    val colors = KcTheme.colors
+    val press = rememberInteraction()
+    Box(
+        Modifier.height(30.dp).pressScale(press).clip(CircleShape).background(if (ink) colors.text else colors.panelMuted)
+            .clickable(interactionSource = press, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, style = KcTheme.type.caption, color = if (ink) colors.panel else colors.text) }
 }

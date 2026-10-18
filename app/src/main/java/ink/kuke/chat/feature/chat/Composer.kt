@@ -123,7 +123,7 @@ fun Composer(
     onSent: () -> Unit,
     isGroup: Boolean = false,
     canMentionAll: Boolean = false,
-    /** 工具面板里的工具（image / poll / redPacket / gift / poke）交给聊天页去开面板 */
+    /** 工具面板里的工具（image / file / poll / redPacket / gift / poke）交给聊天页去开面板 */
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
@@ -609,13 +609,15 @@ private fun EmojiTab(icon: ImageVector, label: String, on: Boolean, click: () ->
     ) { KcIcon(icon, tint = if (on) colors.accent else colors.muted, size = 18.dp, contentDescription = label) }
 }
 
-/** 工具面板（设计稿 P06）：图片、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
+/** 工具面板（设计稿 P06）：图片、文件、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
 @Composable
 private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
     val colors = KcTheme.colors
     // 色块取自设计稿 .c-*：图标用该色，底是面色白块 + 轻影
     val tools = buildList {
         add(Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)))
+        // 文件走群文件（私聊没有群文件，服务端 400 not_group）
+        if (isGroup) add(Tool("file", "文件", KcIcons.paperclip, Color(0xFF12A679)))
         if (isGroup) add(Tool("mention", "@ 群成员", KcIcons.atSign, Color(0xFF16907C)))
         add(Tool("poll", "发起投票", KcIcons.poll, Color(0xFFF0700A)))
         add(Tool("redPacket", "红包", KcIcons.redPacket, Color(0xFFE5484D)))

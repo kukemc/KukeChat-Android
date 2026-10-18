@@ -148,6 +148,8 @@ data class FileQuota(
     @SerialName("temp_max_bytes") val tempMaxBytes: Long? = null,
     /** 档位能不能用文件夹（有效档位 Pro+ / MAX）。旧服务端没有这个字段 */
     @SerialName("folders_enabled") val foldersEnabled: Boolean = false,
+    /** 服务端开了直传直下（预签名 PUT 到私有桶）：上传先走 /files/uploads，走不通再退回 multipart。旧服务端没有这个字段 */
+    val direct: Boolean = false,
 )
 
 @Serializable
@@ -368,6 +370,9 @@ class GroupPlusApi(private val graph: AppGraph) {
         }
         return root.items + inFolders
     }
+
+    /** 群文件配额和状态（GET /conversations/{cid}/files/usage）：聊天里发文件前用它挡掉没解锁 / 超大的 */
+    suspend fun usage(cid: Long): FileQuota = KcJson.decodeFromJsonElement(FileQuota.serializer(), api.get("/conversations/$cid/files/usage"))
 
     suspend fun createFolder(cid: Long, name: String): GroupFileFolder =
         KcJson.decodeFromJsonElement(GroupFileFolder.serializer(), api.post("/conversations/$cid/files/folders", buildJsonObject { put("name", name) }))

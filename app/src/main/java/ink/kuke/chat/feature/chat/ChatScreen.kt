@@ -382,6 +382,43 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     // 发出去以后：上下文模式下先回到最新，否则贴底
     val afterSend: () -> Unit = { if (controller.inContext) goLatest() else scope.launch { listState.animateScrollToItem(0) } }
 
+    // ---------------------------------------------------------------- 发文件（群聊）：先查群文件状态，再开系统文件选择器（可多选），每个文件一张本地卡片
+    var fileQuota by remember { mutableStateOf<ink.kuke.chat.feature.groupplus.FileQuota?>(null) }
+    /** 群文件没解锁：居中提示（群主 / 管理员可以去升级） */
+    var fileLockedHint by remember { mutableStateOf<String?>(null) }
+    val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val max = fileQuota?.maxFileBytes ?: 104857600L
+        if (uris.size > MAX_FILES) toast(context, "一次最多发 $MAX_FILES 个文件")
+        val files = uris.take(MAX_FILES).mapNotNull { uri ->
+            val info = ink.kuke.chat.feature.groupfiles.describePicked(context, uri)
+            when {
+                info.size == 0L -> null.also { toast(context, "「${info.name}」是空文件，不能发送") }
+                info.size > max -> null.also { toast(context, "「${info.name}」超过 ${ink.kuke.chat.feature.groupplus.formatBytes(max)}，不能发送") }
+                else -> info
+            }
+        }
+        if (controller.sendFiles(files, fileQuota?.direct == true)) {
+            Haptics.confirm(view)
+            afterSend()
+        }
+    }
+    fun startFilePick() {
+        scope.launch {
+            // 查不到（网络、旧服务端）就照常让选，上传时服务端会把关
+            val quota = runCatching { GroupPlusApi(graph).usage(conversationId) }.getOrNull()
+            fileQuota = quota
+            when (quota?.state) {
+                null, "active" -> runCatching { pickFiles.launch(arrayOf("*/*")) }.onFailure { toast(context, "打不开文件选择器") }
+                "grace" -> toast(context, "群升级已到期，群文件只能查看和下载，续费后恢复上传")
+                else -> fileLockedHint = "群文件需要群升级 Pro 及以上才能使用。"
+            }
+        }
+    }
+
+
     androidx.compose.runtime.CompositionLocalProvider(LocalUriHandler provides inviteUriHandler, LocalMemberNames provides memberNames) {
     Box(Modifier.fillMaxSize()) {
         // 长按菜单打开时下层模糊（设计稿 P04：backdrop-filter blur 6）
@@ -464,6 +501,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                                 },
                                 pending = pending,
                                 onRetry = { pending?.let(controller::retryPending) },
+                                onDiscard = { pending?.let(controller::discardPending) },
                             )
                             if (isGameMessage(message)) GameSourceNote(message.senderId == me?.id)
                         }
@@ -564,6 +602,10 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     onTool = { tool ->
                         if (tool == "image") {
                             pickMoreImages()
+                            return@Composer
+                        }
+                        if (tool == "file") {
+                            startFilePick()
                             return@Composer
                         }
                         overlay = when (tool) {
@@ -780,6 +822,18 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             } else {
                 openFile = null
             }
+        }
+        fileLockedHint?.let { text ->
+            KcConfirm(
+                title = "群文件未解锁",
+                text = text,
+                confirmLabel = if (staff) "去升级" else "知道了",
+                onConfirm = {
+                    fileLockedHint = null
+                    if (staff) nav.go(GroupPlusRoute(conversationId))
+                },
+                onDismiss = { fileLockedHint = null },
+            )
         }
         upgradeHint?.let { text ->
             KcConfirm(
@@ -1143,3 +1197,6 @@ private fun Modifier.swipeBackGesture(onSwipeLeft: () -> Unit): Modifier = compo
         }
     }
 }
+
+/** 「文件」一次最多选几个 */
+private const val MAX_FILES = 9

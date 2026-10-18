@@ -206,6 +206,8 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         override fun onFailed(reason: String) {
             error.value = reason
         }
+
+        override fun has(messageId: Long): Boolean = messages.any { it.id == messageId }
     }
 
     /** 离开聊天页：发送队列照常跑，确认的消息改记进消息缓存 */
@@ -416,6 +418,16 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         return enqueue(PendingMessage.Kind.Voice, voice = OutgoingVoice(bytes, durationMs), meta = meta)
     }
 
+    /**
+     * 发文件（群聊）：每个文件立刻放一张本地卡片（带进度、可取消），后台上传；传完服务端落文件消息，卡片原地换成它。
+     * 不带引用（文件消息由上传接口生成，没有 metadata 可带）。[direct] = 群文件配额里的直传开关
+     */
+    fun sendFiles(files: List<ink.kuke.chat.feature.groupfiles.PickedFile>, direct: Boolean): Boolean {
+        if (files.isEmpty()) return false
+        files.forEach { enqueue(PendingMessage.Kind.File, meta = null, file = OutgoingFile(it, direct), keepQuote = true) }
+        return true
+    }
+
     private fun enqueue(
         kind: PendingMessage.Kind,
         text: String = "",
@@ -423,8 +435,10 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
         stickerUrl: String? = null,
         voice: OutgoingVoice? = null,
         meta: JsonObject?,
+        file: OutgoingFile? = null,
+        keepQuote: Boolean = false,
     ): Boolean {
-        val pending = PendingMessage(newClientNonce(), kind, text, images, stickerUrl, voice, meta)
+        val pending = PendingMessage(newClientNonce(), kind, text, images, stickerUrl, voice, meta, file)
         val (type, content, metadata) = pending.previewShape()
         // 发送人信息沿用自己上一条消息的（群名片、头衔、等级），换成服务端那条时名字那行不跳
         val me = graph.session.session.value?.user
@@ -443,7 +457,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
             createdAt = java.time.Instant.now().toString(),
             clientNonce = pending.nonce,
         )
-        quote.value = null
+        if (!keepQuote) quote.value = null
         error.value = null
         outbox.enqueue(pending)
         return true

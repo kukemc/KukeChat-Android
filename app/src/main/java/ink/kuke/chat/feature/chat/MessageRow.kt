@@ -143,6 +143,8 @@ fun MessageRow(
     /** 发送中 / 发送失败的本地消息（乐观发送）：不能引用、回应；旁边画转圈或红色感叹号 */
     pending: PendingMessage? = null,
     onRetry: () -> Unit = {},
+    /** 本地消息的「删除」（文件卡片上的 × / 删除：顺带取消上传） */
+    onDiscard: () -> Unit = {},
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -251,7 +253,9 @@ fun MessageRow(
             }
             if (mine && aside != null && !selecting) Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp)) { aside() }
             // 发送状态：失败 = 红色感叹号（点一下重发）；文字等超过 1 秒还没确认才出现小转圈（图片的转圈叠在图上）
-            if (pending != null) Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp)) { PendingStatus(pending, onRetry) }
+            // 文件卡片自己画进度 / 失败，不再挂转圈和感叹号
+            val pendingFile = pending?.file
+            if (pending != null && pendingFile == null) Box(Modifier.align(Alignment.CenterVertically).padding(end = 6.dp)) { PendingStatus(pending, onRetry) }
             // 引用手势只认按在消息上（名字、气泡、回应）起手的横划：整行的空白处留给外层的左右划（返回 / 打开资料）
             Column(
                 horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
@@ -292,13 +296,17 @@ fun MessageRow(
                         })
                     },
                 ) {
-                    MessageBody(
-                        message, mine, callbacks, skin = rememberSenderSkin(message),
-                        imageOverlay = pending?.takeIf { it.hasLocalImages && !it.failed }?.let { p -> { index -> UploadBadge(p, index) } },
-                    )
+                    if (pending != null && pendingFile != null) {
+                        PendingFileCard(pendingFile, pending.failed, pending.error, onCancel = onDiscard, onRetry = onRetry)
+                    } else {
+                        MessageBody(
+                            message, mine, callbacks, skin = rememberSenderSkin(message),
+                            imageOverlay = pending?.takeIf { it.hasLocalImages && !it.failed }?.let { p -> { index -> UploadBadge(p, index) } },
+                        )
+                    }
                 }
                 if (message.reactions.isNotEmpty()) Reactions(message, mine, callbacks)
-                if (pending?.failed == true) {
+                if (pending?.failed == true && pendingFile == null) {
                     Text(
                         "发送失败，点击重发",
                         style = type.caption,

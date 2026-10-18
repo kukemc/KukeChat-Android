@@ -8,6 +8,7 @@ import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -15,6 +16,8 @@ import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.model.Message
 import ink.kuke.chat.core.net.KcJson
 import ink.kuke.chat.core.net.userMessage
+import ink.kuke.chat.feature.groupfiles.PickedFile
+import ink.kuke.chat.feature.groupfiles.sendGroupFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +65,17 @@ class OutgoingVoice(val bytes: ByteArray, val durationMs: Long) {
     var url: String? = null
 }
 
+/**
+ * 待发的文件（群文件消息，docs/group-plus.md 5.2）：系统文件选择器给的 Uri。
+ * 文件消息由服务端在上传完成时落进群里（announce），客户端不 POST /messages；[direct] 是群文件配额里的直传开关。
+ */
+class OutgoingFile(val picked: PickedFile, val direct: Boolean) {
+    /** 已上传的字节（重试从 0 重新计） */
+    var sent by mutableLongStateOf(0L)
+    /** 0–1；大小读不到时为 null（界面画不确定进度） */
+    val progress: Float? get() = if (picked.size > 0) (sent.toFloat() / picked.size).coerceIn(0f, 1f) else null
+}
+
 class PendingMessage internal constructor(
     val nonce: String,
     val kind: Kind,
@@ -71,8 +85,9 @@ class PendingMessage internal constructor(
     val voice: OutgoingVoice?,
     /** 除媒体地址之外的 metadata（引用、@、表情标记、语音信息…） */
     private val meta: JsonObject?,
+    val file: OutgoingFile? = null,
 ) {
-    enum class Kind { Text, Images, Sticker, Voice }
+    enum class Kind { Text, Images, Sticker, Voice, File }
 
     /** 列表里画的那条：结构和服务端回来的一样（同样的 type / content / metadata），图片用本地 Uri。由 ChatController 填上发送人 */
     lateinit var preview: Message
@@ -96,6 +111,8 @@ class PendingMessage internal constructor(
         Kind.Text -> Triple("text", text, meta)
         Kind.Sticker -> Triple("image", stickerUrl.orEmpty(), meta)
         Kind.Voice -> Triple("voice", voiceUrl.orEmpty(), meta)
+        // 只用来画本地那张卡片（MessageRow 认出 pending.file 自己画），不会发给服务端
+        Kind.File -> Triple("file", "[文件] ${file?.picked?.name.orEmpty()}", meta)
         Kind.Images ->
             // 单张且没有说明：沿用 type=image、content=地址；否则一条文字消息带 metadata.images（图文同条）
             if (media.size == 1 && text.isBlank()) Triple("image", media[0], meta)
@@ -147,6 +164,8 @@ class ConversationOutbox internal constructor(private val graph: AppGraph, val c
     interface Listener {
         fun onConfirmed(message: Message)
         fun onFailed(reason: String)
+        /** 列表里已经有这条（实时事件先到了） */
+        fun has(messageId: Long): Boolean = false
     }
 
     /** 开着的聊天页（ChatController）；没开时确认的消息直接记进消息缓存 */
@@ -173,6 +192,7 @@ class ConversationOutbox internal constructor(private val graph: AppGraph, val c
         run(pending)
     }
 
+    /** 删掉本地那条；还在上传就取消（文件：取消正在进行的上传请求，卡片一起消失） */
     fun discard(pending: PendingMessage) {
         pending.job?.cancel()
         items.remove(pending)
@@ -191,6 +211,8 @@ class ConversationOutbox internal constructor(private val graph: AppGraph, val c
     }
 
     private fun run(pending: PendingMessage) {
+        // 文件不排进发送顺序：上传可能要很久，不能挡住后面的文字
+        if (pending.kind == PendingMessage.Kind.File) return runFile(pending)
         val previous = tail
         val done = CompletableDeferred<Unit>()
         tail = done
@@ -228,6 +250,32 @@ class ConversationOutbox internal constructor(private val graph: AppGraph, val c
                 }
             } finally {
                 done.complete(Unit)
+            }
+        }
+    }
+
+    /**
+     * 文件：传完（直传 complete / multipart 返回）时服务端已经把文件消息落进群里并推了 message.created，
+     * 回包里的 message 就是那条。摘掉本地卡片、放进服务端那条；实时事件没先到时沿用本地 key，原地替换。
+     */
+    private fun runFile(pending: PendingMessage) {
+        val file = pending.file ?: return
+        pending.job = scope.launch {
+            try {
+                file.sent = 0
+                val result = sendGroupFile(graph, graph.appContext, conversationId, file.picked, file.direct) { sent -> file.sent = sent }
+                if (items.none { it === pending }) return@launch
+                val message = result.message?.let(::decode)
+                if (message != null && listener?.has(message.id) != true) keys[message.id] = pending.nonce
+                items.remove(pending)
+                message?.let(::deliver)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (items.any { it === pending }) {
+                    pending.error = e.userMessage()
+                    pending.failed = true
+                }
             }
         }
     }
