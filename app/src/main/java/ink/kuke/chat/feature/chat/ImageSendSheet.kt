@@ -36,7 +36,7 @@ import ink.kuke.chat.ui.icons.KcIcons
 import ink.kuke.chat.ui.theme.KcTheme
 
 /**
- * 发图前的确认面板：选好的图排成 4 列缩略图（右上角 × 去掉），可以继续添加（最多 9 张），一行可选的说明文字，
+ * 发图前的确认面板：选好的图排成 4 列缩略图（右上角 × 去掉），可以继续从相册添加或再拍一张（最多 9 张），一行可选的说明文字，
  * 底部「取消」「发送（N）」墨色胶囊（同群升级面板）。多张合成一条消息发，说明文字和图在同一条里。
  */
 @Composable
@@ -47,6 +47,8 @@ internal fun ImageSendSheet(
     onRemove: (Uri) -> Unit,
     /** null = 已经 9 张，不再显示「继续添加」 */
     onAdd: (() -> Unit)?,
+    /** 再拍一张（系统相机）；null = 已经 9 张，不显示「拍照」 */
+    onShoot: (() -> Unit)?,
     onCancel: () -> Unit,
     onSend: () -> Unit,
 ) {
@@ -59,13 +61,19 @@ internal fun ImageSendSheet(
                 Spacer(Modifier.weight(1f))
                 Text("${images.size} / ${ChatController.MAX_IMAGES}", style = type.caption.copy(fontFeatureSettings = "tnum"), color = k.faint)
             }
-            val tiles: List<Uri?> = images + if (onAdd != null) listOf(null) else emptyList()
+            // 缩略图后面跟「继续添加」「拍照」两个格子
+            val tiles: List<Any> = images + listOfNotNull(onAdd?.let { AddTile.Pick }, onShoot?.let { AddTile.Shoot })
             Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 tiles.chunked(4).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { uri ->
+                        row.forEach { tile ->
                             Box(Modifier.weight(1f).aspectRatio(1f)) {
-                                if (uri != null) Thumb(uri, onRemove = { onRemove(uri) }) else AddTile(onAdd ?: {})
+                                when (tile) {
+                                    AddTile.Pick -> ActionTile(KcIcons.plus, "继续添加", onAdd ?: {})
+                                    AddTile.Shoot -> ActionTile(KcIcons.camera, "拍照", onShoot ?: {})
+                                    is Uri -> Thumb(tile, onRemove = { onRemove(tile) })
+                                    else -> Unit
+                                }
                             }
                         }
                         repeat(4 - row.size) { Box(Modifier.weight(1f)) }
@@ -104,16 +112,19 @@ private fun Thumb(uri: Uri, onRemove: () -> Unit) {
     }
 }
 
+private enum class AddTile { Pick, Shoot }
+
+/** 缩略图后面的虚格：「继续添加」（相册）/「拍照」（相机） */
 @Composable
-private fun AddTile(onAdd: () -> Unit) {
+private fun ActionTile(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     val k = plusInk()
     val shape = RoundedCornerShape(10.dp)
     Column(
-        Modifier.fillMaxSize().clip(shape).border(1.dp, k.lineStrong, shape).clickable(onClick = onAdd),
+        Modifier.fillMaxSize().clip(shape).border(1.dp, k.lineStrong, shape).clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        KcIcon(KcIcons.plus, tint = k.sub, size = 20.dp)
-        Text("继续添加", color = k.sub, fontSize = 11.5.sp, fontWeight = FontWeight.W500, modifier = Modifier.padding(top = 4.dp))
+        KcIcon(icon, tint = k.sub, size = 20.dp)
+        Text(label, color = k.sub, fontSize = 11.5.sp, fontWeight = FontWeight.W500, modifier = Modifier.padding(top = 4.dp))
     }
 }

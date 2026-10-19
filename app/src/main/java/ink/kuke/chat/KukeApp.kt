@@ -26,6 +26,8 @@ class KukeApp : Application(), ImageLoaderFactory {
         ink.kuke.chat.feature.settings.UpdateCenter.watch(graph)
         // 上次进程里分享进来的附件副本：新进程里已经没有任何东西引用它们了（只留刚拷的，防同一进程里正在准备发送的）
         graph.scope.launch(kotlinx.coroutines.Dispatchers.IO) { ink.kuke.chat.feature.share.ShareCache.sweep(this@KukeApp, olderThanMs = 10 * 60 * 1000L) }
+        // 聊天里拍的照片同理（发出去的留到这时才删，见 CameraShots）
+        graph.scope.launch(kotlinx.coroutines.Dispatchers.IO) { ink.kuke.chat.feature.chat.CameraShots.sweep(this@KukeApp, olderThanMs = 10 * 60 * 1000L) }
     }
 
     // Coil 默认只解第一帧；装上动图解码器，GIF / 动态 WebP 表情才会动（Android 9+ 用系统 ImageDecoder，更省内存）

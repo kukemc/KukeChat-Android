@@ -3,6 +3,8 @@ package ink.kuke.chat.feature.chat
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
@@ -349,8 +351,13 @@ internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: 
         var sample = 1
         while (bounds.outWidth / sample > MAX_EDGE * 2 || bounds.outHeight / sample > MAX_EDGE * 2) sample *= 2
         val decoded = BitmapFactory.decodeByteArray(raw, 0, raw.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("这不是一张能识别的图片")
+        // 重新编码成 JPEG 会丢掉 EXIF：相机拍的照片（尤其竖着拍）像素常是横的、靠 EXIF 方向标记转正，这里先按它转好再压
+        val rotation = exifRotation(raw)
         val scale = minOf(1f, MAX_EDGE.toFloat() / maxOf(decoded.width, decoded.height))
-        val bitmap = if (scale < 1f) Bitmap.createScaledBitmap(decoded, (decoded.width * scale).toInt(), (decoded.height * scale).toInt(), true) else decoded
+        val bitmap = if (scale < 1f || rotation != 0f) {
+            val matrix = Matrix().apply { postScale(scale, scale); if (rotation != 0f) postRotate(rotation) }
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        } else decoded
         var quality = 88
         var out: ByteArray
         do {
@@ -365,6 +372,16 @@ internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: 
     val uploaded = graph.api.upload("/uploads/message-image", body)
     (uploaded as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull ?: error("上传没有返回地址")
 }
+
+/** EXIF 里的方向标记换成要顺时针转的角度；读不到（PNG、WebP、没有 EXIF）就是 0 */
+private fun exifRotation(raw: ByteArray): Float = runCatching {
+    when (ExifInterface(raw.inputStream()).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+        else -> 0f
+    }
+}.getOrDefault(0f)
 
 /** 分块写出、边写边报进度的请求体 */
 private class ProgressBody(private val bytes: ByteArray, private val type: MediaType, private val onProgress: ((Float) -> Unit)?) : RequestBody() {

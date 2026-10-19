@@ -185,6 +185,16 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     fun pickMoreImages() = pickImages.launch(
         androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly),
     )
+    // 拍照：系统相机拍一张，放进同一个确认面板（和相册选的图一起发、一样压缩上传），见 CameraCapture.kt
+    val takePhoto = rememberTakePhoto { uri ->
+        if (imageDraft.size < ChatController.MAX_IMAGES) imageDraft.add(uri) else {
+            CameraShots.delete(context, uri)
+            toast(context, "一次最多发 ${ChatController.MAX_IMAGES} 张")
+        }
+    }
+    fun shootImage() {
+        if (imageDraft.size >= ChatController.MAX_IMAGES) toast(context, "一次最多发 ${ChatController.MAX_IMAGES} 张") else takePhoto()
+    }
     // 长按发送中 / 失败的本地消息：只有「重发」「删除」
     var actingPending by remember { mutableStateOf<PendingMessage?>(null) }
     val pendingItems = controller.outbox.items
@@ -648,6 +658,10 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             pickMoreImages()
                             return@Composer
                         }
+                        if (tool == "camera") {
+                            shootImage()
+                            return@Composer
+                        }
                         if (tool == "file") {
                             startFilePick()
                             return@Composer
@@ -677,13 +691,21 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 images = imageDraft.toList(),
                 caption = imageCaption,
                 onCaption = { imageCaption = it },
-                onRemove = { imageDraft.remove(it) },
+                // 去掉的是拍的照片就顺手删临时文件（相册的图不动）
+                onRemove = { imageDraft.remove(it); CameraShots.delete(context, it) },
                 onAdd = if (imageDraft.size < ChatController.MAX_IMAGES) ({ pickMoreImages() }) else null,
-                onCancel = closeDraft,
+                onShoot = if (imageDraft.size < ChatController.MAX_IMAGES) ({ takePhoto() }) else null,
+                onCancel = {
+                    imageDraft.forEach { CameraShots.delete(context, it) }
+                    closeDraft()
+                },
                 onSend = {
+                    // 发出去的照片不删：聊天里还用本地这张画、失败重发也要读，下次启动再清
                     if (controller.sendImages(imageDraft.toList(), imageCaption)) {
                         Haptics.confirm(view)
                         afterSend()
+                    } else {
+                        imageDraft.forEach { CameraShots.delete(context, it) }
                     }
                     closeDraft()
                 },

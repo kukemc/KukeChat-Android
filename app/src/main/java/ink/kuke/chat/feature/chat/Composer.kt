@@ -125,7 +125,7 @@ fun Composer(
     onSent: () -> Unit,
     isGroup: Boolean = false,
     canMentionAll: Boolean = false,
-    /** 工具面板里的工具（image / file / poll / redPacket / gift / poke）交给聊天页去开面板 */
+    /** 工具面板里的工具（image / camera / file / poll / redPacket / gift / poke）交给聊天页去开面板 */
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
@@ -387,7 +387,7 @@ fun Composer(
                 Panel.Tools -> ToolsPanel(316.dp, isGroup) { tool ->
                     panel = Panel.None
                     when (tool) {
-                        // 「图片」交给聊天页：多选（最多 9 张）后弹确认面板，见 ImageSendSheet.kt
+                        // 「图片」「拍照」交给聊天页：多选（最多 9 张）/ 拍一张后弹确认面板，见 ImageSendSheet.kt
                         // @ 群成员 / 机器人指令：往输入框里放一个触发字符，面板自己弹出来
                         "mention" -> {
                             val start = value.selection.start
@@ -614,13 +614,15 @@ private fun EmojiTab(icon: ImageVector, label: String, on: Boolean, click: () ->
     ) { KcIcon(icon, tint = if (on) colors.accent else colors.muted, size = 18.dp, contentDescription = label) }
 }
 
-/** 工具面板（设计稿 P06）：图片、文件、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
+/** 工具面板（设计稿 P06）：图片、拍照、文件、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
 @Composable
 private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
     val colors = KcTheme.colors
     // 色块取自设计稿 .c-*：图标用该色，底是面色白块 + 轻影
     val tools = buildList {
         add(Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)))
+        // 拍照：调系统相机拍一张，拍完进发图确认面板（同相册选的图）
+        add(Tool("camera", "拍照", KcIcons.camera, Color(0xFF0E9AB8)))
         // 文件走群文件（私聊没有群文件，服务端 400 not_group）
         if (isGroup) add(Tool("file", "文件", KcIcons.paperclip, Color(0xFF12A679)))
         if (isGroup) add(Tool("mention", "@ 群成员", KcIcons.atSign, Color(0xFF16907C)))
@@ -630,18 +632,20 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
         if (isGroup) add(Tool("command", "机器人指令", KcIcons.bot, Color(0xFF7A55D6)))
         if (isGroup) add(Tool("poke", "戳一戳", KcIcons.poke, Color(0xFFE39B00)))
     }
+    // 超过 8 个（群聊 9 个）排三行：行高从 115 收到 84、行距 18 → 12，三行正好放进面板，不用滚
+    val threeRows = tools.size > 8
     Box(
         Modifier.fillMaxWidth().height(height).background(colors.chat)
             .drawBehind { drawRect(colors.border, size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx())) }
             .padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 10.dp),
     ) {
-        LazyVerticalGrid(GridCells.Fixed(4), verticalArrangement = Arrangement.spacedBy(18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyVerticalGrid(GridCells.Fixed(4), verticalArrangement = Arrangement.spacedBy(if (threeRows) 12.dp else 18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(tools, key = { it.key }) { tool ->
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(7.dp),
                     // 设计稿：276 高的网格两行等分（每行约 115dp），图标块贴行首
-                    modifier = Modifier.height(115.dp).clip(RoundedCornerShape(12.dp)).clickable { onTool(tool.key) },
+                    modifier = Modifier.height(if (threeRows) 84.dp else 115.dp).clip(RoundedCornerShape(12.dp)).clickable { onTool(tool.key) },
                 ) {
                     Box(
                         Modifier.size(58.dp).shadow(2.dp, RoundedCornerShape(17.dp)).background(colors.panel, RoundedCornerShape(17.dp)),
