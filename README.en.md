@@ -8,10 +8,18 @@
 
 The Android edition of KukeChat, written from scratch in Kotlin and Jetpack Compose, talking to the same backend as every other client.
 
-[![License](https://img.shields.io/badge/License-MIT-111111?style=flat-square)](LICENSE)
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0-111111?style=flat-square)](https://kotlinlang.org)
-[![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.12-111111?style=flat-square)](https://developer.android.com/jetpack/compose)
-[![SDK](https://img.shields.io/badge/minSdk%20%2F%20targetSdk-26%20%2F%2035-111111?style=flat-square)](app/build.gradle.kts)
+<p align="center">
+<img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;Native Kotlin + Compose&emsp;&emsp;
+<img src=".github/assets/icons/radio.svg" width="16" height="16" align="absmiddle">&nbsp;Always-on realtime&emsp;&emsp;
+<img src=".github/assets/icons/link.svg" width="16" height="16" align="absmiddle">&nbsp;Same account as desktop&emsp;&emsp;
+<img src=".github/assets/icons/download.svg" width="16" height="16" align="absmiddle">&nbsp;In-app updates
+</p>
+
+[![License](https://img.shields.io/badge/License-MIT-111111?style=flat-square&logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0-111111?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.12-111111?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
+[![Material 3](https://img.shields.io/badge/Material-3-111111?style=flat-square&logo=materialdesign&logoColor=white)](https://m3.material.io)
+[![SDK](https://img.shields.io/badge/minSdk%20%2F%20targetSdk-26%20%2F%2035-111111?style=flat-square&logo=android&logoColor=white)](app/build.gradle.kts)
 
 [简体中文](README.md) · **English**
 
@@ -36,20 +44,24 @@ It connects to the same [KukeChat-Server](https://github.com/kukemc/KukeChat-Ser
 
 Everything listed below is implemented in the code today.
 
-| Area | What's included |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Area&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | What's included |
 | --- | --- |
-| Chat | Direct messages and groups; text, images (pick several at once, preview before sending), files; quoted replies (swipe to reply), forwarding, reactions (long-press to see who reacted), recall; messages appear instantly on send and can be retried on failure; CCW project and Bilibili video links render as cards; polls; in-conversation search, with the target message centered and highlighted on jump |
-| Voice | Hold to talk; live playback progress with seeking; long-press to transcribe |
-| Stickers | Favorite stickers, including animated GIF, animated WebP and APNG; a sticker manager with drag-to-reorder, batch delete and move-to-front; group stickers (admins can reorder, rename and add in bulk) |
-| Mentions | A "mentioned you" pill that steps through messages that @ you or @ everyone; a hint that jumps to unclaimed red packets |
-| Red packets and gifts | Regular, relay and exclusive red packets, with history; gifts and cosmetics as presents; a shop for bubble skins and avatar frames |
-| Groups | Group profile and management; announcements with read confirmations; group files (folders, search, download progress, in-app video playback); featured messages, check-in and group tasks; Pro / Pro+ / MAX group upgrades |
-| Favorites | Saved messages across all conversations, filterable by all / direct / group |
-| Community | Feed (friends, square, topics, posting); community home; team-up center; bot square; account levels and leaderboards; friendship intimacy with badges and streaks; birthday celebrations |
-| Jury | A desk for community jurors that shows only anonymized case snapshots provided by the server |
-| System integration | A foreground service keeps the realtime connection alive, with WorkManager catching up if the system stops it; share text, images, video and files in from other apps, with direct-share shortcuts; invite deep links `kukechat://invite/<token>`; in-app updates that check automatically when the backend announces a release and verify the download's sha256; predictive back; customizable bottom bar and feature order |
+| <img src=".github/assets/icons/message-circle.svg" width="16" height="16" align="absmiddle">&nbsp;Chat | Direct messages and groups; text, images (pick several at once, preview before sending), files; quoted replies (swipe to reply), forwarding, reactions (long-press to see who reacted), recall; messages appear instantly on send and can be retried on failure; CCW project and Bilibili video links render as cards; polls; in-conversation search, with the target message centered and highlighted on jump |
+| <img src=".github/assets/icons/mic.svg" width="16" height="16" align="absmiddle">&nbsp;Voice | Hold to talk; live playback progress with seeking; long-press to transcribe |
+| <img src=".github/assets/icons/smile.svg" width="16" height="16" align="absmiddle">&nbsp;Stickers | Favorite stickers, including animated GIF, animated WebP and APNG; a sticker manager with drag-to-reorder, batch delete and move-to-front; group stickers (admins can reorder, rename and add in bulk) |
+| <img src=".github/assets/icons/at-sign.svg" width="16" height="16" align="absmiddle">&nbsp;Mentions | A "mentioned you" pill that steps through messages that @ you or @ everyone; a hint that jumps to unclaimed red packets |
+| <img src=".github/assets/icons/gift.svg" width="16" height="16" align="absmiddle">&nbsp;Red packets and gifts | Regular, relay and exclusive red packets, with history; gifts and cosmetics as presents; a shop for bubble skins and avatar frames |
+| <img src=".github/assets/icons/users.svg" width="16" height="16" align="absmiddle">&nbsp;Groups | Group profile and management; announcements with read confirmations; group files (folders, search, download progress, in-app video playback); featured messages, check-in and group tasks; Pro / Pro+ / MAX group upgrades |
+| <img src=".github/assets/icons/bookmark.svg" width="16" height="16" align="absmiddle">&nbsp;Favorites | Saved messages across all conversations, filterable by all / direct / group |
+| <img src=".github/assets/icons/newspaper.svg" width="16" height="16" align="absmiddle">&nbsp;Community | Feed (friends, square, topics, posting); community home; team-up center; bot square; account levels and leaderboards; friendship intimacy with badges and streaks; birthday celebrations |
+| <img src=".github/assets/icons/shield-check.svg" width="16" height="16" align="absmiddle">&nbsp;Jury | A desk for community jurors that shows only anonymized case snapshots provided by the server |
+| <img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;System integration | A foreground service keeps the realtime connection alive, with WorkManager catching up if the system stops it; share text, images, video and files in from other apps, with direct-share shortcuts; invite deep links `kukechat://invite/<token>`; in-app updates that check automatically when the backend announces a release and verify the download's sha256; predictive back; customizable bottom bar and feature order |
 
 ## Tech stack
+
+<p align="center">
+<img src="https://skillicons.dev/icons?i=kotlin,java,gradle,androidstudio&theme=dark" height="40" alt="Kotlin, Java, Gradle, Android Studio">
+</p>
 
 | Layer | Choice |
 | --- | --- |
@@ -157,9 +169,9 @@ Official builds are available on the [KukeChat download page](https://chat-api.k
 
 | Repository | Description |
 | --- | --- |
-| [KukeChat-Server](https://github.com/kukemc/KukeChat-Server) | Backend: REST API, WebSocket, database |
-| [KukeChat-Client](https://github.com/kukemc/KukeChat-Client) | Community extension, desktop app and H5 |
-| KukeChat-Android | Native Android client (this repository) |
+| <img src=".github/assets/icons/server.svg" width="16" height="16" align="absmiddle">&nbsp;[KukeChat-Server](https://github.com/kukemc/KukeChat-Server) | Backend: REST API, WebSocket, database |
+| <img src=".github/assets/icons/monitor.svg" width="16" height="16" align="absmiddle">&nbsp;[KukeChat-Client](https://github.com/kukemc/KukeChat-Client) | Community extension and desktop app (Windows; macOS in beta) |
+| <img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;KukeChat-Android | Native Android client (this repository) |
 
 ## Contributing
 

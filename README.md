@@ -8,10 +8,18 @@
 
 KukeChat 的安卓版，用 Kotlin 与 Jetpack Compose 从头写成，和其他客户端连同一个后端。
 
-[![License](https://img.shields.io/badge/License-MIT-111111?style=flat-square)](LICENSE)
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0-111111?style=flat-square)](https://kotlinlang.org)
-[![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.12-111111?style=flat-square)](https://developer.android.com/jetpack/compose)
-[![SDK](https://img.shields.io/badge/minSdk%20%2F%20targetSdk-26%20%2F%2035-111111?style=flat-square)](app/build.gradle.kts)
+<p align="center">
+<img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;原生 Kotlin + Compose&emsp;&emsp;
+<img src=".github/assets/icons/radio.svg" width="16" height="16" align="absmiddle">&nbsp;后台常驻实时连接&emsp;&emsp;
+<img src=".github/assets/icons/link.svg" width="16" height="16" align="absmiddle">&nbsp;与桌面端账号互通&emsp;&emsp;
+<img src=".github/assets/icons/download.svg" width="16" height="16" align="absmiddle">&nbsp;应用内更新
+</p>
+
+[![License](https://img.shields.io/badge/License-MIT-111111?style=flat-square&logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0-111111?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-BOM%202024.12-111111?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
+[![Material 3](https://img.shields.io/badge/Material-3-111111?style=flat-square&logo=materialdesign&logoColor=white)](https://m3.material.io)
+[![SDK](https://img.shields.io/badge/minSdk%20%2F%20targetSdk-26%20%2F%2035-111111?style=flat-square&logo=android&logoColor=white)](app/build.gradle.kts)
 
 **简体中文** · [English](README.en.md)
 
@@ -36,20 +44,24 @@ KukeChat 是给 Scratch / CCW 创作者用的聊天应用。社区扩展和桌�
 
 下面列的都是代码里已经实现的功能。
 
-| 分类 | 内容 |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;分&#8288;类&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | 内容 |
 | --- | --- |
-| 聊天 | 私聊与群聊；文字、图片（一次选多张，发送前预览）、文件；引用回复（滑动即回复）、转发、表情回应（长按查看谁回应了）、撤回；消息发出即上屏，失败可点击重发；CCW 作品和 B 站视频链接显示为卡片；投票；会话内搜索，跳转到某条消息时居中高亮 |
-| 语音 | 按住说话；播放时实时显示进度，可拖动；长按「转文字」 |
-| 表情 | 收藏表情，支持 GIF、动态 WebP、APNG 动图；表情管理页可拖动排序、批量删除、移到最前；群表情（管理员可排序、重命名、批量添加） |
-| 提醒 | 「有人@我」胶囊，点一下逐条跳到 @ 我和 @ 全体成员的消息；聊天里有未领红包时提示并直达 |
-| 红包与礼物 | 普通红包、接龙红包、专属红包，红包记录；送礼物和装扮；商店（气泡皮肤、头像框） |
-| 群 | 群资料与管理；群公告与确认统计；群文件（文件夹、搜索、下载进度、视频在线播放）；群精华、群签到、群任务；群升级 Pro / Pro+ / MAX |
-| 收藏 | 跨会话收藏消息，按全部 / 私聊 / 群聊筛选 |
-| 社区 | 动态（好友动态、广场、话题、发布）；社区主页；组队中心；机器人广场；账号等级与排行榜；好友亲密度与徽章、火花；生日庆祝 |
-| 风纪 | 风纪委员工作台，只展示服务端给出的匿名案件快照 |
-| 系统集成 | 常驻前台服务保持实时连接，被系统停掉后由 WorkManager 补拉；从其他应用分享文字、图片、视频、文件进来，支持直接分享快捷方式；邀请深链接 `kukechat://invite/<token>`；应用内更新，后端发版推送后自动检查，下载完校验 sha256；预测性返回；底栏与功能入口可自定义排序 |
+| <img src=".github/assets/icons/message-circle.svg" width="16" height="16" align="absmiddle">&nbsp;聊天 | 私聊与群聊；文字、图片（一次选多张，发送前预览）、文件；引用回复（滑动即回复）、转发、表情回应（长按查看谁回应了）、撤回；消息发出即上屏，失败可点击重发；CCW 作品和 B 站视频链接显示为卡片；投票；会话内搜索，跳转到某条消息时居中高亮 |
+| <img src=".github/assets/icons/mic.svg" width="16" height="16" align="absmiddle">&nbsp;语音 | 按住说话；播放时实时显示进度，可拖动；长按「转文字」 |
+| <img src=".github/assets/icons/smile.svg" width="16" height="16" align="absmiddle">&nbsp;表情 | 收藏表情，支持 GIF、动态 WebP、APNG 动图；表情管理页可拖动排序、批量删除、移到最前；群表情（管理员可排序、重命名、批量添加） |
+| <img src=".github/assets/icons/at-sign.svg" width="16" height="16" align="absmiddle">&nbsp;提醒 | 「有人@我」胶囊，点一下逐条跳到 @ 我和 @ 全体成员的消息；聊天里有未领红包时提示并直达 |
+| <img src=".github/assets/icons/gift.svg" width="16" height="16" align="absmiddle">&nbsp;红包与礼物 | 普通红包、接龙红包、专属红包，红包记录；送礼物和装扮；商店（气泡皮肤、头像框） |
+| <img src=".github/assets/icons/users.svg" width="16" height="16" align="absmiddle">&nbsp;群 | 群资料与管理；群公告与确认统计；群文件（文件夹、搜索、下载进度、视频在线播放）；群精华、群签到、群任务；群升级 Pro / Pro+ / MAX |
+| <img src=".github/assets/icons/bookmark.svg" width="16" height="16" align="absmiddle">&nbsp;收藏 | 跨会话收藏消息，按全部 / 私聊 / 群聊筛选 |
+| <img src=".github/assets/icons/newspaper.svg" width="16" height="16" align="absmiddle">&nbsp;社区 | 动态（好友动态、广场、话题、发布）；社区主页；组队中心；机器人广场；账号等级与排行榜；好友亲密度与徽章、火花；生日庆祝 |
+| <img src=".github/assets/icons/shield-check.svg" width="16" height="16" align="absmiddle">&nbsp;风纪 | 风纪委员工作台，只展示服务端给出的匿名案件快照 |
+| <img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;系统集成 | 常驻前台服务保持实时连接，被系统停掉后由 WorkManager 补拉；从其他应用分享文字、图片、视频、文件进来，支持直接分享快捷方式；邀请深链接 `kukechat://invite/<token>`；应用内更新，后端发版推送后自动检查，下载完校验 sha256；预测性返回；底栏与功能入口可自定义排序 |
 
 ## 技术栈
+
+<p align="center">
+<img src="https://skillicons.dev/icons?i=kotlin,java,gradle,androidstudio&theme=dark" height="40" alt="Kotlin, Java, Gradle, Android Studio">
+</p>
 
 | 层 | 选型 |
 | --- | --- |
@@ -157,9 +169,9 @@ tools/build-icons.mjs  从 KukeChat-Client 的 lucide 线稿生成 Compose 图�
 
 | 仓库 | 说明 |
 | --- | --- |
-| [KukeChat-Server](https://github.com/kukemc/KukeChat-Server) | 后端：REST API、WebSocket、数据库 |
-| [KukeChat-Client](https://github.com/kukemc/KukeChat-Client) | 社区扩展、桌面端与 H5 |
-| KukeChat-Android | 原生安卓客户端（本仓库） |
+| <img src=".github/assets/icons/server.svg" width="16" height="16" align="absmiddle">&nbsp;[KukeChat-Server](https://github.com/kukemc/KukeChat-Server) | 后端：REST API、WebSocket、数据库 |
+| <img src=".github/assets/icons/monitor.svg" width="16" height="16" align="absmiddle">&nbsp;[KukeChat-Client](https://github.com/kukemc/KukeChat-Client) | 社区扩展与桌面端（Windows，macOS 测试中） |
+| <img src=".github/assets/icons/smartphone.svg" width="16" height="16" align="absmiddle">&nbsp;KukeChat-Android | 原生安卓客户端（本仓库） |
 
 ## 贡献
 
