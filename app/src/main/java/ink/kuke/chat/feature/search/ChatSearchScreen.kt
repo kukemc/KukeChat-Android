@@ -522,7 +522,8 @@ fun ConversationHitRow(entry: ConversationHits, query: String, onClick: () -> Un
         Modifier.fillMaxWidth().background(colors.panel).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Avatar(conversation.avatarUrl, conversation.displayTitle, tone = conversation.directUser?.id ?: conversation.id, size = 44.dp, plusTier = if (conversation.isGroup) conversation.plusTier else null)
+        if (conversation.isSelf) ink.kuke.chat.feature.selfchat.DeviceAvatar(44.dp)
+        else Avatar(conversation.avatarUrl, conversation.displayTitle, tone = conversation.directUser?.id ?: conversation.id, size = 44.dp, plusTier = if (conversation.isGroup) conversation.plusTier else null)
         Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(conversation.displayTitle, style = type.rowTitle, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))

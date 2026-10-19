@@ -26,6 +26,8 @@ class SearchConversation(
     val avatarUrl: String?,
     val plusTier: String,
     val directUser: User?,
+    /** 「我的设备」会话：名字按本端起（「我的电脑」），头像本地画 */
+    val isSelf: Boolean = false,
 )
 
 /** 一条命中：message + 片段 + 片段里的高亮区间（UTF-16 下标，和 Kotlin String 一致） */
@@ -64,6 +66,10 @@ private fun parseConversation(obj: JsonObject?): SearchConversation? {
     val id = obj.long("id") ?: return null
     val direct = obj["direct_user"].obj()?.let { runCatching { KcJson.decodeFromJsonElement(User.serializer(), it) }.getOrNull() }
     val isGroup = obj.str("type") == "group"
+    // 「我的设备」：服务端给的 display_title 是中性的「我的设备」，客户端按 docs/self-chat.md 1.3 换名字
+    if (obj.str("type") == ink.kuke.chat.core.model.SELF_TYPE) {
+        return SearchConversation(id, false, ink.kuke.chat.core.model.SELF_CHAT_NAME, null, "free", null, isSelf = true)
+    }
     val title = obj.str("display_title")?.takeIf { it.isNotBlank() } ?: obj.str("title")?.takeIf { it.isNotBlank() } ?: direct?.displayName ?: "会话 $id"
     return SearchConversation(id, isGroup, title, obj.str("avatar_url") ?: direct?.avatarUrl, obj.str("plus_tier") ?: "free", direct)
 }

@@ -145,6 +145,8 @@ fun ConversationListScreen(graph: AppGraph, onOpen: (Long) -> Unit, drawer: Prof
     }
 
     val visible = items.filter { conversation ->
+        // 「我的电脑」总在列表里
+        if (conversation.isSelf) return@filter true
         val stamp = hidden[conversation.id] ?: return@filter true
         // 隐藏之后又有新消息（updated_at 变新）就重新出现
         val hiddenAt = parseInstant(stamp)
@@ -420,7 +422,9 @@ private fun SwipeConversationRow(
     val view = LocalView.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    val actionsPx = with(density) { (ActionWidth * 3).toPx() }
+    // 「我的电脑」不能删除 / 退出（docs/self-chat.md 第 4 节）：背后只有置顶 · 免打扰，也没有「滑到底直接删除」
+    val deletable = !conversation.isSelf
+    val actionsPx = with(density) { (ActionWidth * (if (deletable) 3 else 2)).toPx() }
     val offset = remember { Animatable(0f) }
     var rowWidth by remember { mutableStateOf(1f) }
     var crossed by remember { mutableStateOf(false) }
@@ -443,12 +447,12 @@ private fun SwipeConversationRow(
                     onOpenedChange(false)
                     onPin()
                 }
-                ActionCell(if (conversation.quiet) "取消免打扰" else "免打扰", SwipeMute, Modifier.width(ActionWidth)) {
+                ActionCell(if (conversation.quiet) "取消免打扰" else "免打扰", SwipeMute, if (deletable) Modifier.width(ActionWidth) else Modifier.weight(1f)) {
                     scope.launch { offset.animateTo(0f) }
                     onOpenedChange(false)
                     onMute()
                 }
-                ActionCell("删除", colors.danger, Modifier.weight(1f)) {
+                if (deletable) ActionCell("删除", colors.danger, Modifier.weight(1f)) {
                     scope.launch { offset.animateTo(0f) }
                     onOpenedChange(false)
                     onDelete()
@@ -466,7 +470,7 @@ private fun SwipeConversationRow(
                         onDragEnd = {
                             scope.launch {
                                 when {
-                                    -offset.value > rowWidth * 0.6f -> {
+                                    deletable && -offset.value > rowWidth * 0.6f -> {
                                         offset.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 500f))
                                         onOpenedChange(false)
                                         onDelete()
@@ -485,9 +489,9 @@ private fun SwipeConversationRow(
                         onDragCancel = { scope.launch { offset.animateTo(0f) } },
                     ) { change, amount ->
                         change.consume()
-                        val next = (offset.value + amount).coerceIn(-rowWidth, 0f)
+                        val next = (offset.value + amount).coerceIn(if (deletable) -rowWidth else -actionsPx * 1.15f, 0f)
                         scope.launch { offset.snapTo(next) }
-                        val over = -next > rowWidth * 0.6f
+                        val over = deletable && -next > rowWidth * 0.6f
                         if (over != crossed) {
                             crossed = over
                             if (over) Haptics.tick(view)
@@ -552,8 +556,13 @@ private fun ConversationRow(conversation: Conversation, pinTop: Boolean, pinBott
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val frame = if (conversation.isGroup) null else conversation.directUser?.let { ink.kuke.chat.feature.shop.rememberAvatarFrame(it.id, it.cosmetics) }
-        Avatar(avatarUrl, name, tone = conversation.directUser?.id ?: conversation.id, size = 48.dp, plusTier = conversation.effectivePlusTier, frame = frame)
+        if (conversation.isSelf) {
+            // 「我的电脑」：本地画的设备头像（docs/self-chat.md 1.3）
+            ink.kuke.chat.feature.selfchat.DeviceAvatar(48.dp)
+        } else {
+            val frame = if (conversation.isGroup) null else conversation.directUser?.let { ink.kuke.chat.feature.shop.rememberAvatarFrame(it.id, it.cosmetics) }
+            Avatar(avatarUrl, name, tone = conversation.directUser?.id ?: conversation.id, size = 48.dp, plusTier = conversation.effectivePlusTier, frame = frame)
+        }
         Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 名字 + 群升级标签占左边剩下的全部宽度，时间始终贴右（之前两个 weight 平分，名字短时时间会跑到中间）
@@ -567,9 +576,9 @@ private fun ConversationRow(conversation: Conversation, pinTop: Boolean, pinBott
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     // 单聊：好友徽章挂在名字后（不是好友 / 未开放时什么也不画）
-                    if (!conversation.isGroup) FriendBadgeMark(conversation.directUser?.id, size = 16.dp, modifier = Modifier.padding(start = 4.dp))
+                    if (!conversation.isGroup && !conversation.isSelf) FriendBadgeMark(conversation.directUser?.id, size = 16.dp, modifier = Modifier.padding(start = 4.dp))
                     // 单聊：好友火花（图标 + 天数，docs/sparks.md）
-                    if (!conversation.isGroup) ink.kuke.chat.feature.spark.SparkMark(conversation.spark, modifier = Modifier.padding(start = 4.dp))
+                    if (!conversation.isGroup && !conversation.isSelf) ink.kuke.chat.feature.spark.SparkMark(conversation.spark, modifier = Modifier.padding(start = 4.dp))
                     PlusTierTag(conversation.effectivePlusTier, Modifier.padding(start = 6.dp), compact = true)
                 }
                 Text(listTime(conversation.lastMessage?.createdAt ?: conversation.updatedAt), modifier = Modifier.padding(start = 8.dp), style = type.caption, color = if (unread > 0 && !conversation.quiet) colors.accent else colors.subtle)
@@ -602,7 +611,13 @@ private fun preview(conversation: Conversation, draft: String?) = buildAnnotated
     }
     val last = conversation.lastMessage
     if (last == null) {
-        append(if (conversation.isGroup) "${conversation.memberCount} 名成员" else "开始聊天吧")
+        append(
+            when {
+                conversation.isGroup -> "${conversation.memberCount} 名成员"
+                conversation.isSelf -> "在手机和电脑之间传消息和文件"
+                else -> "开始聊天吧"
+            },
+        )
         return@buildAnnotatedString
     }
     if (conversation.isGroup && last.type != "system") append("${last.senderName}：")
@@ -666,8 +681,10 @@ private fun ConversationMenu(
         SheetRow("接收并提醒", { onSetting("notify") }, icon = KcIcons.bell, selected = conversation.messageSetting == "notify")
         SheetRow("接收不提醒", { onSetting("silent") }, icon = KcIcons.bellOff, selected = conversation.messageSetting == "silent")
         SheetRow("屏蔽消息", { onSetting("ignore") }, icon = KcIcons.muted, selected = conversation.messageSetting == "ignore")
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
-        SheetRow(if (conversation.isGroup) "退出群聊" else "删除会话", onDelete, icon = KcIcons.trash, danger = true)
+        if (!conversation.isSelf) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+            SheetRow(if (conversation.isGroup) "退出群聊" else "删除会话", onDelete, icon = KcIcons.trash, danger = true)
+        }
         Box(Modifier.height(8.dp))
     }
 }

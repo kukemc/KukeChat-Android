@@ -34,7 +34,7 @@ data class RealtimeEvent(val type: String, val data: JsonObject)
 enum class ConnectionState { Idle, Connecting, Connected, Waiting }
 
 /**
- * 整个 App 唯一的一条 WebSocket（/ws?token=）。由后台常驻服务（RealtimeService）持有并启停，界面只订阅 events。
+ * 整个 App 唯一的一条 WebSocket（/ws?token=&features=self）。由后台常驻服务（RealtimeService）持有并启停，界面只订阅 events。
  *
  * 协议（KukeChat-Server/app/websocket/routes.py）：
  *   - 每 25 秒发文本 ping，服务端回文本 pong；10 秒没回就当断了，主动关掉重连。
@@ -111,7 +111,8 @@ class RealtimeClient(
         socket?.cancel()
         _state.value = ConnectionState.Connecting
         val separator = if (Endpoints.ws.contains('?')) '&' else '?'
-        val request = Request.Builder().url("${Endpoints.ws}${separator}token=${URLEncoder.encode(token, "UTF-8")}").build()
+        // features=self：声明认识「我的设备」会话，不带的话这个会话的事件一条都收不到（docs/self-chat.md 3.2）
+        val request = Request.Builder().url("${Endpoints.ws}${separator}token=${URLEncoder.encode(token, "UTF-8")}&features=self").build()
         socket = http.newWebSocket(request, Listener())
     }
 

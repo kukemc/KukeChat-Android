@@ -129,6 +129,8 @@ fun Composer(
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
+    /** 「我的设备」会话：工具只有图片、拍照、文件（没有投票、红包、礼物，docs/self-chat.md 第 4 节） */
+    selfChat: Boolean = false,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -384,7 +386,7 @@ fun Composer(
                 }, onSticker = { url -> if (controller.sendSticker(url)) onSent() },
                     onGroupEmoji = { emoji -> if (controller.sendSticker(emoji.url, emoji.id)) onSent() },
                     onCollapse = { panel = Panel.None; requestInputFocus() })
-                Panel.Tools -> ToolsPanel(316.dp, isGroup) { tool ->
+                Panel.Tools -> ToolsPanel(316.dp, isGroup, selfChat) { tool ->
                     panel = Panel.None
                     when (tool) {
                         // 「图片」「拍照」交给聊天页：多选（最多 9 张）/ 拍一张后弹确认面板，见 ImageSendSheet.kt
@@ -616,10 +618,15 @@ private fun EmojiTab(icon: ImageVector, label: String, on: Boolean, click: () ->
 
 /** 工具面板（设计稿 P06）：图片、拍照、文件、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
 @Composable
-private fun ToolsPanel(height: Dp, isGroup: Boolean, onTool: (String) -> Unit) {
+private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: (String) -> Unit) {
     val colors = KcTheme.colors
     // 色块取自设计稿 .c-*：图标用该色，底是面色白块 + 轻影
-    val tools = buildList {
+    val tools = if (selfChat) listOf(
+        Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)),
+        Tool("camera", "拍照", KcIcons.camera, Color(0xFF0E9AB8)),
+        // 临时文件：任意类型，24 小时后过期（docs/self-chat.md 第 5 节）
+        Tool("file", "文件", KcIcons.paperclip, Color(0xFF12A679)),
+    ) else buildList {
         add(Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)))
         // 拍照：调系统相机拍一张，拍完进发图确认面板（同相册选的图）
         add(Tool("camera", "拍照", KcIcons.camera, Color(0xFF0E9AB8)))

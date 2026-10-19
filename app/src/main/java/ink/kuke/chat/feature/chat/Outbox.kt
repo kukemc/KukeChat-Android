@@ -71,7 +71,17 @@ class OutgoingVoice(val bytes: ByteArray, val durationMs: Long) {
  * 待发的文件（群文件消息，docs/group-plus.md 5.2）：系统文件选择器给的 Uri。
  * 文件消息由服务端在上传完成时落进群里（announce），客户端不 POST /messages；[direct] 是群文件配额里的直传开关。
  */
-class OutgoingFile(val picked: PickedFile, val direct: Boolean) {
+class OutgoingFile(
+    val picked: PickedFile,
+    val direct: Boolean,
+    /** 「我的设备」的临时文件（docs/self-chat.md 第 5 节）：开单 → PUT → complete，而不是群文件 */
+    val selfTransfer: Boolean = false,
+) {
+    /** 临时文件：开好的上传单（SelfTransferTicket），重试时 PUT 地址没过期就接着用 */
+    internal var ticket: Any? = null
+    /** 临时文件：字节已经传上去了，重试只需要再 complete（比如撞了发消息限频） */
+    internal var uploaded = false
+
     /** 已上传的字节（重试从 0 重新计） */
     var sent by mutableLongStateOf(0L)
     /** 0–1；大小读不到时为 null（界面画不确定进度） */
@@ -264,10 +274,14 @@ class ConversationOutbox internal constructor(private val graph: AppGraph, val c
         val file = pending.file ?: return
         pending.job = scope.launch {
             try {
-                file.sent = 0
-                val result = sendGroupFile(graph, graph.appContext, conversationId, file.picked, file.direct) { sent -> file.sent = sent }
+                val message = if (file.selfTransfer) {
+                    // 「我的设备」：complete 带上 client_nonce，message.created 先到时按 nonce 认领（同普通消息）
+                    ink.kuke.chat.feature.selfchat.sendSelfTransfer(graph, graph.appContext, conversationId, file, pending.nonce)?.let(::decode)
+                } else {
+                    file.sent = 0
+                    sendGroupFile(graph, graph.appContext, conversationId, file.picked, file.direct) { sent -> file.sent = sent }.message?.let(::decode)
+                }
                 if (items.none { it === pending }) return@launch
-                val message = result.message?.let(::decode)
                 if (message != null && listener?.has(message.id) != true) keys[message.id] = pending.nonce
                 items.remove(pending)
                 message?.let(::deliver)

@@ -92,7 +92,8 @@ class RealtimeService : Service() {
                 "conversation.read" -> {
                     // 在别的设备上读过了：通知收掉
                     val conversationId = event.data["conversation_id"]?.jsonPrimitive?.longOrNull ?: return@collect
-                    if (event.data["user_id"]?.jsonPrimitive?.longOrNull == graph.session.session.value?.user?.id) {
+                    // 「我的设备」的已读是按人记的：别的设备读过不代表这台看过，通知留着
+                    if (event.data["user_id"]?.jsonPrimitive?.longOrNull == graph.session.session.value?.user?.id && !graph.conversations.isSelf(conversationId)) {
                         Notifier.cancel(this, conversationId)
                     }
                 }

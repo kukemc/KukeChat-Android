@@ -182,7 +182,24 @@ object FileDownloads {
      * 开始下载（或复用已有的）。openAfter：下完自动用系统应用打开（已经下好的立刻打开）。
      * 在自己的作用域里跑：调用方的面板关了也不会打断。
      */
-    fun download(graph: AppGraph, context: Context, conversationId: Long, fileId: Long, name: String, size: Long, openAfter: Boolean) {
+    fun download(graph: AppGraph, context: Context, conversationId: Long, fileId: Long, name: String, size: Long, openAfter: Boolean) =
+        downloadWith(context, fileId, name, size, openAfter, "KukeChat 群文件") { resolveSource(graph, conversationId, fileId) }
+
+    /**
+     * 通用版：[key] 是 [states] 里的键（群文件用文件 id；「我的设备」的临时文件用负的 transfer id，两边不撞），
+     * [resolve] 现取下载地址。[onError] 把取地址的失败换成一句提示（返回 null 用默认文案）。
+     */
+    fun downloadWith(
+        context: Context,
+        key: Long,
+        name: String,
+        size: Long,
+        openAfter: Boolean,
+        description: String,
+        onError: ((Throwable) -> String?)? = null,
+        resolve: suspend () -> FileSource,
+    ) {
+        val fileId = key
         val app = context.applicationContext
         if (fileId in starting) return
         starting += fileId
@@ -205,8 +222,8 @@ object FileDownloads {
                     is FileDownload.Failed -> recordedId(app, fileId)?.let { old -> runCatching { manager(app).remove(old) } }
                     null -> Unit
                 }
-                val source = resolveSource(graph, conversationId, fileId)
-                val downloadId = withContext(Dispatchers.IO) { enqueue(app, source, name) }
+                val source = resolve()
+                val downloadId = withContext(Dispatchers.IO) { enqueue(app, source, name, description) }
                 prefs(app).edit().putLong(fileId.toString(), downloadId).apply()
                 states[fileId] = FileDownload.Running(0, size)
                 if (openAfter) openWhenDone[fileId] = name
@@ -214,7 +231,7 @@ object FileDownloads {
                 ensurePolling(app)
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
-                toast(app, error.userMessage())
+                toast(app, onError?.invoke(error) ?: error.userMessage())
             } finally {
                 starting -= fileId
             }
@@ -244,11 +261,11 @@ object FileDownloads {
         return FileSource(Endpoints.api + apiPath, headers)
     }
 
-    private fun enqueue(app: Context, source: FileSource, name: String): Long {
+    private fun enqueue(app: Context, source: FileSource, name: String, description: String): Long {
         val local = safeLocalName(name)
         val request = DownloadManager.Request(Uri.parse(source.url))
             .setTitle(name)
-            .setDescription("KukeChat 群文件")
+            .setDescription(description)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(true)

@@ -46,7 +46,7 @@ fun describePicked(context: Context, uri: Uri): PickedFile {
 /**
  * 流式 multipart 文件体：不把 100MB 读进内存，边读边写，并回报已发送字节（界面画进度条）。
  */
-private class StreamingFileBody(
+internal class StreamingFileBody(
     private val context: Context,
     private val uri: Uri,
     private val mime: String,

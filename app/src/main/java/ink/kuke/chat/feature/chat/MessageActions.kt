@@ -66,8 +66,10 @@ data class MessageAction(val key: String, val label: String, val icon: ImageVect
  * 红包、礼物、群文件消息服务端不允许转发（文件下载要鉴权，别的会话的人下不了），这里不给「转发」；「添加到表情」只在图片上出现。
  * 「收藏」「设为精华」不挑类型：语音、文件、合并转发、投票、红包都可以（卡片上的长按见 MessageRow 的 LocalMessageLongPress）。
  */
-fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String? = null): List<MessageAction> = buildList {
-    val copyable = message.type == "text" || message.content.isNotBlank() && message.type !in listOf("image", "voice", "red_packet", "gift", "poll", "forward_bundle")
+fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String? = null, selfChat: Boolean = false): List<MessageAction> = buildList {
+    // 「我的设备」的临时文件（docs/self-chat.md 5.5）：不能收藏、转发、多选，也没有可复制的正文
+    val transfer = ink.kuke.chat.feature.selfchat.transferOf(message) != null
+    val copyable = !transfer && (message.type == "text" || message.content.isNotBlank() && message.type !in listOf("image", "voice", "red_packet", "gift", "poll", "forward_bundle"))
     if (copyable) add(MessageAction("copy", "复制", KcIcons.copy))
     // 语音转文字：转出来的字挂在气泡下面；已经展开着就换成「收起文字」
     if (message.type == "voice" && !message.isRecalled) {
@@ -75,17 +77,18 @@ fun actionsFor(message: Message, mine: Boolean, staff: Boolean, imageUrl: String
         else add(MessageAction("transcribe", "转文字", KcIcons.type))
     }
     add(MessageAction("quote", "引用", KcIcons.quote))
-    if (message.type !in listOf("red_packet", "gift", "system") && fileMetaOf(message) == null) add(MessageAction("forward", "转发", KcIcons.forward))
-    add(MessageAction("select", "多选", KcIcons.checkSquare))
-    add(MessageAction("bookmark", "收藏", KcIcons.bookmark))
+    if (message.type !in listOf("red_packet", "gift", "system") && fileMetaOf(message) == null && !transfer) add(MessageAction("forward", "转发", KcIcons.forward))
+    if (!transfer) add(MessageAction("select", "多选", KcIcons.checkSquare))
+    if (!transfer) add(MessageAction("bookmark", "收藏", KcIcons.bookmark))
     if (staff) add(MessageAction("feature", if (message.featured) "取消精华" else "设为精华", KcIcons.star))
     // 群待办：群主 / 管理员；文本 / 图片 / 语音 / 合并转发 / 投票（文件消息是文本消息）。红包、礼物、系统消息服务端 422
     if (staff && !message.isRecalled && message.type in listOf("text", "image", "voice", "forward_bundle", "poll")) {
         add(MessageAction("todo", "群待办", KcIcons.checkSquare))
     }
-    if (mine || staff) add(MessageAction("recall", "撤回", KcIcons.recall))
+    // 「我的设备」里的消息都是自己发的：哪台设备发的都能撤（撤回文件消息 = 删除文件）；没有举报（第 4 节）
+    if (mine || staff || selfChat) add(MessageAction("recall", "撤回", KcIcons.recall))
     add(MessageAction("delete", "删除", KcIcons.trash, danger = true))
-    if (!mine) add(MessageAction("report", "举报", KcIcons.flag, danger = true))
+    if (!mine && !selfChat) add(MessageAction("report", "举报", KcIcons.flag, danger = true))
     // 图片 / 表情消息，或长按了多图消息里的某一张（[imageUrl]）
     if (message.type == "image" || imageUrl != null) add(MessageAction("sticker", "添加到表情", KcIcons.imagePlus))
 }
@@ -108,6 +111,9 @@ fun MessageActionsLayer(
     pendingActions: List<MessageAction>? = null,
     /** 长按的是多图消息里的某一张：给出「添加到表情」 */
     imageUrl: String? = null,
+    /** 「我的设备」会话：左边消息的设备名（抬起的消息照样画设备头像），菜单按 self 规则出 */
+    deviceLabel: String? = null,
+    selfChat: Boolean = false,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -149,10 +155,10 @@ fun MessageActionsLayer(
             )
             // 抬起的消息：原样渲染一条（回调全空，不会再次触发长按）
             Box(Modifier.fillMaxWidth().heightIn(max = if (expanded) 160.dp else 280.dp).clipToBounds()) {
-                MessageRow(message = message, mine = mine, isGroup = isGroup, showName = isGroup, callbacks = noop)
+                MessageRow(message = message, mine = mine, isGroup = isGroup, showName = isGroup || (deviceLabel != null && !mine), callbacks = noop, deviceLabel = deviceLabel)
             }
             // 操作宫格 5 × N（展开表情面板时收起）
-            val actions = pendingActions ?: actionsFor(message, mine, staff, imageUrl)
+            val actions = pendingActions ?: actionsFor(message, mine, staff, imageUrl, selfChat)
             if (!expanded) Column(
                 Modifier.padding(start = if (mine) 0.dp else 44.dp, end = if (mine) 44.dp else 0.dp)
                     .widthIn(max = 320.dp).fillMaxWidth()

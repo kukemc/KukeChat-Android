@@ -63,7 +63,7 @@ internal fun ForwardTargetSheet(controller: ChatController, count: Int, onDismis
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 items(list, key = { it.id }) { conversation ->
                     Row(Modifier.fillMaxWidth().clickable { onPick(conversation.id, note) }.padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(
+                        if (conversation.isSelf) ink.kuke.chat.feature.selfchat.DeviceAvatar(40.dp) else Avatar(
                             if (conversation.isGroup) conversation.avatarUrl else conversation.directUser?.avatarUrl ?: conversation.avatarUrl,
                             conversation.name(),
                             tone = conversation.directUser?.id ?: conversation.id,

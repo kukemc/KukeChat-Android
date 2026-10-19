@@ -32,6 +32,8 @@ data class ShareTarget(
     val detail: String?,
     /** 根本发不了（全员禁言中…）：行置灰 */
     val blockedReason: String? = null,
+    /** 「我的电脑」：文件走临时文件（24 小时后过期），图片照常是图片消息 */
+    val self: Boolean = false,
 )
 
 /** 发到一个目标的计划：文字 / 图片一律发（私聊、群聊都行），[files] 是这个群能收的群文件 */
@@ -99,7 +101,7 @@ object ShareSender {
                     }
                 }
                 val files = job.files.mapNotNull { item -> copiedFiles[item]?.takeIf { it.size <= job.fileLimit } }
-                if (files.isNotEmpty()) any = controller.sendFiles(files, job.direct) || any
+                if (files.isNotEmpty()) any = (if (job.target.self) controller.sendSelfFiles(files) else controller.sendFiles(files, job.direct)) || any
                 if (any && note.isNotBlank()) controller.sendText(note.trim())
                 box.items.filter { item -> before.none { it === item } }.forEach { tracked += box to it }
                 if (any) {

@@ -204,6 +204,16 @@ class ShareModel(application: Application) : AndroidViewModel(application) {
         val p = payload ?: return Eligibility.Blocked("没有可以分享的内容")
         target.blockedReason?.let { return Eligibility.Blocked(it) }
         val files = p.files
+        // 「我的电脑」：什么都能发（文件走临时文件），只挡超过单个上限的
+        if (target.self) {
+            val limit = ink.kuke.chat.feature.selfchat.SelfTransfers.lastList?.maxFileBytes ?: ink.kuke.chat.feature.selfchat.SelfTransfers.DEFAULT_MAX_FILE
+            val over = files.filter { it.size > limit }
+            return when {
+                over.isEmpty() -> Eligibility.Ok
+                over.size == files.size && !p.hasDirectSendable -> Eligibility.Blocked("文件超过 ${ink.kuke.chat.feature.groupplus.formatBytes(limit)}，不能发送")
+                else -> Eligibility.Partial("${over.size} 个文件超过 ${ink.kuke.chat.feature.groupplus.formatBytes(limit)}，不会发出")
+            }
+        }
         if (!target.group) {
             if (files.isEmpty()) return Eligibility.Ok
             return if (p.hasDirectSendable) Eligibility.Partial("私聊暂时只能发送文字和图片，文件不会发出")
@@ -244,6 +254,10 @@ class ShareModel(application: Application) : AndroidViewModel(application) {
         }
         selected.add(target)
         val id = target.conversationId
+        // 「我的电脑」：顺手查一下临时文件的上限（查不到按默认 1 GB，上传时服务端把关）
+        if (target.self && id != null && payload?.files?.isNotEmpty() == true && ink.kuke.chat.feature.selfchat.SelfTransfers.lastList == null) {
+            viewModelScope.launch { runCatching { ink.kuke.chat.feature.selfchat.SelfTransfers.list(graph, id) } }
+        }
         if (target.group && id != null && payload?.files?.isNotEmpty() == true && quotas[id] == null) {
             quotas[id] = QuotaState.Loading
             viewModelScope.launch {
@@ -268,6 +282,10 @@ class ShareModel(application: Application) : AndroidViewModel(application) {
         sending = true
         val jobs = selected.map { target ->
             val id = target.conversationId
+            if (target.self && id != null) {
+                val limit = ink.kuke.chat.feature.selfchat.SelfTransfers.lastList?.maxFileBytes ?: ink.kuke.chat.feature.selfchat.SelfTransfers.DEFAULT_MAX_FILE
+                return@map ShareJob(target, p.files.filter { it.size <= limit }, direct = false, fileLimit = limit)
+            }
             if (!target.group || id == null || p.files.isEmpty()) {
                 ShareJob(target, emptyList(), direct = false, fileLimit = 0)
             } else {
@@ -310,8 +328,14 @@ internal fun Conversation.shareTarget(): ShareTarget = ShareTarget(
     avatar = if (isGroup) avatarUrl else directUser?.avatarUrl ?: avatarUrl,
     tone = directUser?.id ?: id,
     plusTier = plusTier.takeIf { isGroup },
-    detail = if (isGroup) (if (memberCount > 0) "群聊 · $memberCount 人" else "群聊") else if (directUser?.isBot == true) "机器人" else null,
+    detail = when {
+        isSelf -> "发给自己的电脑 · 文件 24 小时后过期"
+        isGroup -> if (memberCount > 0) "群聊 · $memberCount 人" else "群聊"
+        directUser?.isBot == true -> "机器人"
+        else -> null
+    },
     blockedReason = if (isGroup && allMuted && myRole != "owner" && myRole != "admin") "全员禁言中" else null,
+    self = isSelf,
 )
 
 /** 还没有私聊会话的好友 → 分享目标（发送前再建会话） */

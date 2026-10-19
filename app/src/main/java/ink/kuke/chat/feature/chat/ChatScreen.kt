@@ -111,6 +111,8 @@ private sealed interface Overlay {
     data object PokePick : Overlay
     data object ConfirmClear : Overlay
     data class Report(val target: ReportTarget) : Overlay
+    /** 「我的电脑」的会话设置（替代群资料 / 对方资料） */
+    data object SelfInfo : Overlay
 }
 
 /**
@@ -146,6 +148,14 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
     var upgradeHint by remember { mutableStateOf<String?>(null) }
     val staff = conversation?.myRole == "owner" || conversation?.myRole == "admin"
     val isGroup = conversation?.isGroup == true
+    // 「我的设备」（docs/self-chat.md）：消息都是自己发的，左右按发送设备的设备类分（电脑发的在左边）
+    val isSelf = conversation?.isSelf == true || graph.conversations.isSelf(conversationId)
+    val deviceLabel = if (isSelf) ink.kuke.chat.core.data.SelfDevice.PEER_LABEL else null
+    val isMine: (Message) -> Boolean = { message ->
+        if (isSelf) !ink.kuke.chat.core.data.SelfDevice.fromOtherDevice(message) else message.senderId == me?.id
+    }
+    // 临时文件卡片点开的下载面板
+    var openTransfer by remember { mutableStateOf<ink.kuke.chat.feature.selfchat.TransferMeta?>(null) }
     val messages = controller.messages
     var composerDismiss by remember { mutableIntStateOf(0) }
     val selecting = controller.selecting.value
@@ -328,7 +338,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         // 跳转换列表、上下文模式往后补页时不跟（底部不是真正的最新，跟下去会一路连锁加载）
         if (jumping || controller.inContext) return@LaunchedEffect
         // 在底部（或者是自己发的）时自动跟到最新；不在底部就只亮「回到最新」
-        if (atBottom || messages.lastOrNull()?.senderId == me?.id) listState.animateScrollToItem(0)
+        if (atBottom || messages.lastOrNull()?.let(isMine) == true) listState.animateScrollToItem(0)
         if (atBottom) lastSeenNewest = newest
     }
     LaunchedEffect(atBottom) { if (atBottom) lastSeenNewest = newest }
@@ -361,7 +371,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
 
     // 机器人的头像 / 名字：不弹用户名片，直接进机器人详情
     val openBot = ink.kuke.chat.feature.bots.rememberOpenBotForUser(graph)
-    val callbacks = remember(controller, staff, me?.id, isGroup, openBot) {
+    val callbacks = remember(controller, staff, me?.id, isGroup, openBot, isSelf) {
         MessageCallbacks(
             onLongPress = {
                 // 输入法还开着时，操作菜单会被键盘盖住：先收起键盘、取消输入框焦点
@@ -402,6 +412,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             onOpenBundle = { overlay = Overlay.Bundle(it) },
             onOpenShare = { message -> shareRouteOf(message)?.let(nav::go) },
             onOpenFile = { openFile = it },
+            onOpenTransfer = { message -> ink.kuke.chat.feature.selfchat.transferOf(message)?.let { openTransfer = it } },
             onButton = { message, button ->
                 if (button.action == "open") button.href?.let { runCatching { inviteUriHandler.openUri(it) } }
                 else controller.interact(message, button)
@@ -451,6 +462,40 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             afterSend()
         }
     }
+    // ---------------------------------------------------------------- 发临时文件（「我的设备」）：任意类型，单个上限和总额度从 GET …/transfers 读
+    val pickSelfFiles = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val limits = ink.kuke.chat.feature.selfchat.SelfTransfers.lastList
+        val max = limits?.maxFileBytes ?: ink.kuke.chat.feature.selfchat.SelfTransfers.DEFAULT_MAX_FILE
+        if (uris.size > MAX_FILES) toast(context, "一次最多发 $MAX_FILES 个文件")
+        var room = limits?.freeBytes
+        val files = uris.take(MAX_FILES).mapNotNull { uri ->
+            val info = ink.kuke.chat.feature.groupfiles.describePicked(context, uri)
+            val free = room
+            when {
+                info.size == 0L -> null.also { toast(context, "「${info.name}」是空文件，不能发送") }
+                info.size > max -> null.also { toast(context, "「${info.name}」太大了，临时文件单个最大 ${ink.kuke.chat.feature.groupplus.formatBytes(max)}") }
+                free != null && info.size > 0 && info.size > free -> null.also {
+                    toast(context, "临时文件空间不够了（还剩 ${ink.kuke.chat.feature.groupplus.formatBytes(free.coerceAtLeast(0))}），等之前的文件过期或撤回后再发")
+                }
+                else -> info.also { if (free != null && info.size > 0) room = free - info.size }
+            }
+        }
+        if (controller.sendSelfFiles(files)) {
+            Haptics.confirm(view)
+            afterSend()
+        }
+    }
+    fun startSelfFilePick() {
+        scope.launch {
+            // 先查一下额度（查不到就按默认上限挡，上传时服务端会把关）
+            runCatching { ink.kuke.chat.feature.selfchat.SelfTransfers.list(graph, conversationId) }
+            runCatching { pickSelfFiles.launch(arrayOf("*/*")) }.onFailure { toast(context, "打不开文件选择器") }
+        }
+    }
+
     fun startFilePick() {
         scope.launch {
             // 查不到（网络、旧服务端）就照常让选，上传时服务端会把关
@@ -473,7 +518,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 SelectionTopBar(controller.selected.size, onCancel = controller::stopSelecting)
             } else {
                 ChatTopBar(
-                    conversation, onBack, onMore = { overlay = Overlay.More }, onTasks = if (isGroup) ({ nav.go(ink.kuke.chat.ui.shell.GroupTasksRoute(conversationId)) }) else null, onSearch = if (!isGroup) ({ overlay = Overlay.Search }) else null,
+                    conversation, onBack, onMore = { overlay = if (isSelf) Overlay.SelfInfo else Overlay.More }, self = isSelf, onTasks = if (isGroup) ({ nav.go(ink.kuke.chat.ui.shell.GroupTasksRoute(conversationId)) }) else null, onSearch = if (!isGroup) ({ overlay = Overlay.Search }) else null,
                     onFriendship = { id -> nav.go(ink.kuke.chat.ui.shell.IntimacyRoute(id)) },
                 )
             }
@@ -503,7 +548,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                         }
                     }
                 }.swipeBackGesture(onSwipeLeft = {
-                    if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { if (it.isBot) openBot(it.id) else nav.go(UserRoute(it.id)) }
+                    if (isSelf) overlay = Overlay.SelfInfo
+                    else if (isGroup) nav.go(GroupInfoRoute(conversationId)) else conversation?.directUser?.let { if (it.isBot) openBot(it.id) else nav.go(UserRoute(it.id)) }
                 }),
             ) {
                 // 倒排（最新在前）：本地消息（发送中 / 失败）排在所有服务端消息之后。
@@ -532,9 +578,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             val repeatHere = repeat?.takeIf { it.first == message.id }?.second
                             MessageRow(
                                 message = message,
-                                mine = message.senderId == me?.id,
+                                mine = isMine(message),
                                 isGroup = isGroup,
-                                showName = isGroup,
+                                showName = isGroup || (isSelf && !isMine(message)),
                                 callbacks = if (pending != null) pendingCallbacks else callbacks,
                                 me = me,
                                 identity = groupIdentity,
@@ -553,6 +599,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                                 pending = pending,
                                 onRetry = { pending?.let(controller::retryPending) },
                                 onDiscard = { pending?.let(controller::discardPending) },
+                                deviceLabel = deviceLabel,
                             )
                             if (isGameMessage(message)) GameSourceNote(message.senderId == me?.id)
                         }
@@ -653,6 +700,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     isGroup = isGroup,
                     canMentionAll = staff,
                     dismissToken = composerDismiss,
+                    selfChat = isSelf,
                     onTool = { tool ->
                         if (tool == "image") {
                             pickMoreImages()
@@ -663,7 +711,7 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             return@Composer
                         }
                         if (tool == "file") {
-                            startFilePick()
+                            if (isSelf) startSelfFilePick() else startFilePick()
                             return@Composer
                         }
                         overlay = when (tool) {
@@ -733,13 +781,15 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
             )
         }
         acting?.let { message ->
-            val mine = message.senderId == me?.id
+            val mine = isMine(message)
             MessageActionsLayer(
                 message = message,
                 isGroup = isGroup,
                 mine = mine,
                 staff = staff,
                 imageUrl = actingImage,
+                deviceLabel = deviceLabel,
+                selfChat = isSelf,
                 onReaction = { emoji ->
                     controller.toggleReaction(message, emoji)
                     acting = null
@@ -858,9 +908,20 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                     controller.poke(it.userId)
                     overlay = null
                 }
+                Overlay.SelfInfo -> ink.kuke.chat.feature.selfchat.SelfInfoPage(
+                    graph = graph,
+                    conversationId = conversationId,
+                    onBack = close,
+                    onSearch = {
+                        overlay = null
+                        nav.go(ChatSearchRoute(conversationId))
+                    },
+                    onClear = { overlay = Overlay.ConfirmClear },
+                    onOpenTransfer = { openTransfer = it },
+                )
                 Overlay.ConfirmClear -> KcConfirm(
                     title = "清空聊天记录",
-                    text = "只清空你这边的聊天记录，对方不受影响。",
+                    text = if (isSelf) "清空后不再显示这些聊天记录。已发出的文件照常保留，到 24 小时后过期。" else "只清空你这边的聊天记录，对方不受影响。",
                     confirmLabel = "清空",
                     danger = true,
                     onConfirm = {
@@ -889,6 +950,9 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 runCatching { ink.kuke.chat.feature.groupplus.GroupPlusApi(graph).filesForCards(conversationId) }
                     .onSuccess { ink.kuke.chat.feature.chat.LiveFiles.apply(it) }
             }
+        }
+        openTransfer?.let { meta ->
+            ink.kuke.chat.feature.selfchat.TransferSheet(graph, conversationId, meta, onDismiss = { openTransfer = null })
         }
         openFile?.let { message ->
             val meta = fileMetaOf(message)
@@ -944,7 +1008,7 @@ private fun reportTargetFor(conversation: Conversation?, conversationId: Long, c
 }
 
 @Composable
-private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: () -> Unit, onTasks: (() -> Unit)? = null, onSearch: (() -> Unit)? = null, onFriendship: (Long) -> Unit = {}) {
+private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: () -> Unit, onTasks: (() -> Unit)? = null, onSearch: (() -> Unit)? = null, onFriendship: (Long) -> Unit = {}, self: Boolean = false) {
     val colors = KcTheme.colors
     val type = KcTheme.type
     Column(Modifier.fillMaxWidth().background(colors.panel)) {
@@ -953,6 +1017,11 @@ private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: 
             Box(Modifier.size(44.dp).pressScale(back, 0.9f).clip(CircleShape).clickable(interactionSource = back, indication = null, onClick = onBack), contentAlignment = Alignment.Center) {
                 KcIcon(KcIcons.chevronLeft, tint = colors.text, size = 24.dp, contentDescription = "返回")
             }
+            // 「我的电脑」：设备头像（本地画）
+            if (self) {
+                Box(Modifier.padding(horizontal = 2.dp)) { ink.kuke.chat.feature.selfchat.DeviceAvatar(36.dp) }
+                Spacer(Modifier.width(8.dp))
+            }
             // 设计稿 P32：私聊顶栏在名字前带 36dp 头像
             conversation?.takeIf { !it.isGroup }?.directUser?.let { u ->
                 Box(Modifier.padding(horizontal = 2.dp)) { ink.kuke.chat.ui.components.Avatar(u.avatarUrl, u.displayName, u.id, 36.dp) }
@@ -960,7 +1029,7 @@ private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: 
             }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(conversation?.name() ?: "", style = type.title, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Text(conversation?.name() ?: if (self) ink.kuke.chat.core.model.SELF_CHAT_NAME else "", style = type.title, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     // 群升级档位后缀（Pro 蓝 / Pro+ 紫 / MAX 金）
                     if (conversation != null && conversation.isGroup) PlusTierTag(conversation.effectivePlusTier, Modifier.padding(start = 6.dp))
                     // 单聊：名字后的好友徽章，点它进「我们的友谊」（不是好友 / 未开放时不画、也不占点击区）
@@ -974,7 +1043,8 @@ private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: 
                     if (peer != null && conversation != null) ink.kuke.chat.feature.spark.SparkHeaderEntry(conversation, peer)
                 }
                 val sub = when {
-                    conversation == null -> ""
+                    conversation == null -> if (self) "临时文件 24 小时后过期" else ""
+                    conversation.isSelf -> if (conversation.quiet) "临时文件 24 小时后过期 · 免打扰" else "临时文件 24 小时后过期"
                     conversation.isGroup -> buildString {
                         append("${conversation.memberCount} 名成员")
                         if (conversation.allMuted) append(" · 全员禁言")

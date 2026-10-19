@@ -275,7 +275,7 @@ private fun ChosenStrip(model: ShareModel) {
         items(model.selected.toList(), key = { it.key }) { target ->
             Column(Modifier.width(52.dp).clickable { model.toggle(target) }, horizontalAlignment = Alignment.CenterHorizontally) {
                 Box {
-                    Avatar(target.avatar, target.name, tone = target.tone, size = 44.dp)
+                    if (target.self) ink.kuke.chat.feature.selfchat.DeviceAvatar(44.dp) else Avatar(target.avatar, target.name, tone = target.tone, size = 44.dp)
                     Box(
                         Modifier.align(Alignment.TopEnd).size(16.dp).clip(CircleShape).background(k.ink).border(1.5.dp, KcTheme.colors.panel, CircleShape),
                         contentAlignment = Alignment.Center,
@@ -318,7 +318,7 @@ private fun TargetRow(model: ShareModel, target: ShareTarget) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.pressScale(press, 0.97f)) {
-            Avatar(target.avatar, target.name, tone = target.tone, size = 44.dp, plusTier = target.plusTier)
+            if (target.self) ink.kuke.chat.feature.selfchat.DeviceAvatar(44.dp) else Avatar(target.avatar, target.name, tone = target.tone, size = 44.dp, plusTier = target.plusTier)
         }
         Column(Modifier.padding(start = 14.dp).weight(1f)) {
             Text(target.name, style = type.rowTitle, color = k.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

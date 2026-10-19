@@ -107,8 +107,11 @@ data class Conversation(
 ) {
     val isGroup: Boolean get() = type == "group"
 
-    /** 会话列表上显示的名字：备注 > 服务端算好的显示名 > 群名 > 私聊对方 */
-    fun name(): String = myRemark?.takeIf { it.isNotBlank() }
+    /** 「我的设备」会话（docs/self-chat.md）：只有自己，各端自己起名（手机上叫「我的电脑」），没有对方资料 */
+    val isSelf: Boolean get() = type == SELF_TYPE
+
+    /** 会话列表上显示的名字：「我的设备」按本端起名；备注 > 服务端算好的显示名 > 群名 > 私聊对方 */
+    fun name(): String = if (isSelf) SELF_CHAT_NAME else myRemark?.takeIf { it.isNotBlank() }
         ?: displayTitle?.takeIf { it.isNotBlank() }
         ?: title?.takeIf { it.isNotBlank() }
         ?: directUser?.displayName
@@ -117,6 +120,12 @@ data class Conversation(
     /** 免打扰：设置了免打扰，或者消息设置不是「接收并提醒」 */
     val quiet: Boolean get() = doNotDisturb || messageSetting != "notify"
 }
+
+/** 「我的设备」会话的类型名 */
+const val SELF_TYPE = "self"
+
+/** 「我的设备」会话在手机上的名字（桌面端叫「我的手机」，见 docs/self-chat.md 1.3） */
+const val SELF_CHAT_NAME = "我的电脑"
 
 @Serializable
 data class TokenResponse(

@@ -82,7 +82,11 @@ object Notifier {
 
     /** 这条消息该不该弹通知 */
     fun shouldNotify(conversation: Conversation, message: Message, myId: Long, visibleConversationId: Long?, appInForeground: Boolean): Boolean {
-        if (message.senderId == myId || message.type == "system" || message.isRecalled) return false
+        if (message.type == "system" || message.isRecalled) return false
+        // 「我的设备」：消息都是自己发的，按设备类判断 —— 电脑发来的才提醒（docs/self-chat.md 3.3）
+        if (conversation.isSelf) {
+            if (!ink.kuke.chat.core.data.SelfDevice.fromOtherDevice(message)) return false
+        } else if (message.senderId == myId) return false
         if (appInForeground && visibleConversationId == conversation.id) return false
         if (conversation.messageSetting == "ignore") return false
         if (conversation.quiet && !mentionsMe(message, myId)) return false
@@ -97,7 +101,9 @@ object Notifier {
             conversation.isGroup -> CHANNEL_GROUP
             else -> CHANNEL_PRIVATE
         }
-        val sender = Person.Builder().setName(message.senderName).setKey("u${message.senderId}").build()
+        val sender = if (conversation.isSelf) {
+            Person.Builder().setName(ink.kuke.chat.core.data.SelfDevice.PEER_LABEL).setKey("self-peer").build()
+        } else Person.Builder().setName(message.senderName).setKey("u${message.senderId}").build()
         val me = Person.Builder().setName("我").setKey("me").build()
         val line = NotificationCompat.MessagingStyle.Message(
             (if (mention) "[有人@我] " else "") + messagePreview(message),

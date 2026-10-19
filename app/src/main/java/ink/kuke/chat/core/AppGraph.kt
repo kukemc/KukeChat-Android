@@ -64,7 +64,10 @@ class AppGraph(context: Context) {
     /** 各页面「上次看到的数据」：先画旧的再静默刷新。按登录用户隔离，退出登录清空 */
     val screenCache = ScreenCache(java.io.File(appContext.filesDir, "screen-cache"), scope) { session.session.value?.user?.id }
 
-    val conversations = ConversationRepository(api, realtime, scope, screenCache) { session.session.value?.user?.id }
+    /** 「我的设备」的本地未读（docs/self-chat.md 3.3） */
+    val selfChat = ink.kuke.chat.core.data.SelfChatStore(appContext) { session.session.value?.user?.id }
+
+    val conversations = ConversationRepository(api, realtime, scope, screenCache, selfChat) { session.session.value?.user?.id }
 
     fun signOut(reason: SignedOut? = null) {
         realtime.stop()
@@ -75,6 +78,7 @@ class AppGraph(context: Context) {
             ink.kuke.chat.feature.contacts.PendingRequests.clear()
             messageCache.clear()
             screenCache.clear()
+            selfChat.clear()
         }
         scope.launch(Dispatchers.Main) {
             ink.kuke.chat.feature.chat.Outbox.clear()

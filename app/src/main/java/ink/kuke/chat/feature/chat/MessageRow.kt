@@ -110,6 +110,8 @@ class MessageCallbacks(
     val onOpenShare: (Message) -> Unit = {},
     /** 群文件消息卡片（metadata.file）：点开下载面板 */
     val onOpenFile: (Message) -> Unit = {},
+    /** 「我的设备」的临时文件卡片（metadata.transfer）：点开下载面板 */
+    val onOpenTransfer: (Message) -> Unit = {},
     val onButton: (Message, BotButton) -> Unit = { _, _ -> },
     /** 多选模式下点一下 = 选中 / 取消 */
     val onToggleSelect: (Message) -> Unit = {},
@@ -156,6 +158,11 @@ fun MessageRow(
     onRetry: () -> Unit = {},
     /** 本地消息的「删除」（文件卡片上的 × / 删除：顺带取消上传） */
     onDiscard: () -> Unit = {},
+    /**
+     * 「我的设备」会话（docs/self-chat.md 第 2 节）：左边（另一类设备发的）不画自己的头像和名字，
+     * 换成设备头像和这个名字（「我的电脑」），不挂等级 / 头衔。null = 普通会话
+     */
+    deviceLabel: String? = null,
 ) {
     val colors = KcTheme.colors
     val type = KcTheme.type
@@ -199,7 +206,7 @@ fun MessageRow(
     if (message.type == "system" || message.isRecalled) {
         Box(Modifier.fillMaxWidth().then(flashModifier).padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
             Text(
-                if (message.isRecalled) "${if (mine) "你" else message.senderName} 撤回了一条消息" else message.content,
+                if (message.isRecalled) "${if (mine) "你" else deviceLabel ?: message.senderName} 撤回了一条消息" else message.content,
                 style = type.caption,
                 color = colors.muted,
                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(colors.text.copy(alpha = 0.05f)).padding(horizontal = 10.dp, vertical = 4.dp),
@@ -238,7 +245,11 @@ fun MessageRow(
                     contentAlignment = Alignment.Center,
                 ) { if (selected) KcIcon(KcIcons.check, tint = colors.onFill, size = 14.dp) }
             }
-            if (!mine) {
+            if (!mine && deviceLabel != null) {
+                // 「我的设备」左边：设备头像（不能点，没有资料可看）
+                ink.kuke.chat.feature.selfchat.DeviceAvatar(38.dp)
+                Spacer(Modifier.width(8.dp))
+            } else if (!mine) {
                 Box(
                     Modifier
                         .offset { IntOffset(shake.value.roundToInt() * 2, 0) }
@@ -297,7 +308,9 @@ fun MessageRow(
             ) {
                 // 群聊里自己的消息也显示身份标签和名字（同电脑版 / QQ，跟着气泡靠右）；私聊两边都不显示（showName = 是否群聊）
                 // 机器人的名字点了和点头像一样（聊天页把机器人转到机器人详情）
-                if (showName) NameLine(message, isGroup, identity, me, onBotName = if (!mine && !selecting && message.sender?.isBot == true) ({ callbacks.onAvatar(message) }) else null)
+                if (showName && deviceLabel != null) {
+                    Text(deviceLabel, style = type.caption, color = colors.muted, maxLines = 1, modifier = Modifier.padding(bottom = 3.dp))
+                } else if (showName) NameLine(message, isGroup, identity, me, onBotName = if (!mine && !selecting && message.sender?.isBot == true) ({ callbacks.onAvatar(message) }) else null)
                 Box(
                     Modifier.pointerInput(message.id, selecting) {
                         if (selecting) return@pointerInput
@@ -520,6 +533,11 @@ private fun MessageBodyContent(
             ForwardCard(message, callbacks)
             return
         }
+    }
+    // 「我的设备」的临时文件：按 metadata.transfer 画文件卡片（倒计时、过期置灰）
+    ink.kuke.chat.feature.selfchat.transferOf(message)?.let { meta ->
+        ink.kuke.chat.feature.selfchat.TransferCard(meta) { callbacks.onOpenTransfer(message) }
+        return
     }
     // 群文件消息：按 metadata.file 画文件卡片（旧客户端看到的是「[文件] 名字（大小）」那行字）
     fileMetaOf(message)?.let { meta ->

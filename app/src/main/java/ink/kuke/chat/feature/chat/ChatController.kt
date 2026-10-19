@@ -92,6 +92,9 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     val myId: Long? get() = graph.session.session.value?.user?.id
 
+    /** 「我的设备」会话（docs/self-chat.md）：没有红包、@、投票这些，文件走临时文件 */
+    val isSelf: Boolean get() = graph.conversations.isSelf(conversationId)
+
     /**
      * 「上下文模式」：列表只是历史中的一段（从搜索 / 引用 / 群待办跳过来，目标不在已加载范围里）。
      * 这时实时推来的新消息和这一段之间有空洞，所以列表只到 contextEdgeId 为止，往下滑逐页补齐，接上最新后退出（同电脑版）。
@@ -367,7 +370,9 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
 
     fun quoteMessage(message: Message) {
         quoteRequests.intValue++
-        quote.value = QuoteDraft(message.id, message.senderId, message.senderName, messagePreview(message).take(80), message.type, message.content.take(200), message.createdAt)
+        // 「我的设备」里电脑发的那条：引用条上写「我的电脑」，和气泡旁的名字一致
+        val name = if (isSelf && ink.kuke.chat.core.data.SelfDevice.fromOtherDevice(message)) ink.kuke.chat.core.data.SelfDevice.PEER_LABEL else message.senderName
+        quote.value = QuoteDraft(message.id, message.senderId, name, messagePreview(message).take(80), message.type, message.content.take(200), message.createdAt)
     }
 
     private fun baseMetadata(mentions: List<Pair<Long, String>> = emptyList(), mentionAll: Boolean = false): JsonObject? {
@@ -441,6 +446,16 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     fun sendFiles(files: List<ink.kuke.chat.feature.groupfiles.PickedFile>, direct: Boolean): Boolean {
         if (files.isEmpty()) return false
         files.forEach { enqueue(PendingMessage.Kind.File, meta = null, file = OutgoingFile(it, direct), keepQuote = true) }
+        return true
+    }
+
+    /**
+     * 发临时文件（「我的设备」，docs/self-chat.md 第 5 节）：每个文件立刻放一张本地卡片（带上传进度、可取消 / 重试），
+     * 后台开单 → 上传 → complete（带 client_nonce）；落下的文件消息原地换掉卡片。
+     */
+    fun sendSelfFiles(files: List<ink.kuke.chat.feature.groupfiles.PickedFile>): Boolean {
+        if (files.isEmpty()) return false
+        files.forEach { enqueue(PendingMessage.Kind.File, meta = null, file = OutgoingFile(it, direct = false, selfTransfer = true), keepQuote = true) }
         return true
     }
 
@@ -604,7 +619,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
      * 旧后端没有这个接口（404 / 422）就静默关掉；别的失败保留现状，下次触发再试。
      */
     fun refreshPendingRedPackets(delayMs: Long = 400) {
-        if (!pendingSupported) return
+        if (!pendingSupported || isSelf) return
         pendingJob?.cancel()
         pendingJob = scope.launch {
             if (delayMs > 0) delay(delayMs)
@@ -631,7 +646,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
      * 进来时没有未读就不问；旧后端没有这个接口（404 / 405）就关掉，只靠本地识别
      */
     private suspend fun loadUnreadMentions() {
-        if (!mentionsSupported) return
+        if (!mentionsSupported || isSelf) return
         val conversation = graph.conversations.find(conversationId)
         if (unreadAtEntry <= 0 && conversation?.mentionPending.isNullOrBlank()) return
         try {
@@ -808,12 +823,18 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     // ------------------------------------------------------------ 多选
 
     fun startSelecting(first: Message) {
+        if (ink.kuke.chat.feature.selfchat.transferOf(first) != null) return
         selecting.value = true
         selected.clear()
         selected.add(first.id)
     }
 
     fun toggleSelected(message: Message) {
+        // 临时文件不能转发（5.5）：多选时不让选
+        if (ink.kuke.chat.feature.selfchat.transferOf(message) != null && message.id !in selected) {
+            notice.value = "临时文件不能转发，想留下来就下载到本地"
+            return
+        }
         if (!selected.remove(message.id)) selected.add(message.id)
         if (selected.isEmpty()) selecting.value = false
     }
@@ -824,7 +845,7 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
     }
 
     /** 选中的消息，按时间正序（撤回的不算） */
-    fun selectedMessages(): List<Message> = messages.filter { it.id in selected && !it.isRecalled }
+    fun selectedMessages(): List<Message> = messages.filter { it.id in selected && !it.isRecalled && ink.kuke.chat.feature.selfchat.transferOf(it) == null }
 
     /** 清空聊天记录（只影响自己）：列表清掉，接口 POST /conversations/{id}/clear */
     fun clearHistory(onDone: () -> Unit) = action {

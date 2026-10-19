@@ -33,6 +33,8 @@ class ConversationRepository(
     private val realtime: RealtimeClient,
     private val scope: CoroutineScope,
     private val cache: ScreenCache,
+    /** 「我的设备」的本地未读（docs/self-chat.md 3.3）；单元测试里可以不给 */
+    private val selfStore: SelfChatStore? = null,
     private val currentUserId: () -> Long?,
 ) {
     private val _items = MutableStateFlow<List<Conversation>>(emptyList())
@@ -45,6 +47,15 @@ class ConversationRepository(
 
     private val refreshLock = Mutex()
     private var pendingRefresh: Job? = null
+
+    /**
+     * 「我的设备」会话的 id（GET /conversations/self 拿到的；每人一个，所有设备同一个）。
+     * 拿到之前 / 旧后端没有这个接口时为 null。
+     */
+    @Volatile var selfConversationId: Long? = null
+        private set
+    /** 旧后端没有「我的设备」（GET /conversations/self 404 / 422）：不再请求，列表也不带 include_self */
+    @Volatile private var selfSupported = true
 
     init {
         scope.launch {
@@ -65,7 +76,11 @@ class ConversationRepository(
 
     suspend fun refresh(): Result<List<Conversation>> = runCatching {
         refreshLock.withLock {
-            val list = KcJson.decodeFromJsonElement(ListSerializer(Conversation.serializer()), api.get("/conversations") as JsonArray)
+            // 「我的设备」：先建（取）会话，再带 include_self 拉列表才有它（docs/self-chat.md 1.2，服务端不会在别处替我们建）
+            ensureSelf()
+            val path = if (selfSupported) "/conversations?include_self=true" else "/conversations"
+            val raw = KcJson.decodeFromJsonElement(ListSerializer(Conversation.serializer()), api.get(path) as JsonArray)
+            val list = withSelfUnread(raw)
             _items.value = sort(list)
             _loaded.value = true
             cache.put(CACHE_KEY, _items.value, ListSerializer(Conversation.serializer()))
@@ -94,10 +109,61 @@ class ConversationRepository(
     fun clear() {
         _items.value = emptyList()
         _loaded.value = false
+        selfConversationId = null
+        selfSupported = true
+    }
+
+    /** 是不是「我的设备」会话（列表里还没有它时按记下的 id 认） */
+    fun isSelf(conversationId: Long): Boolean = conversationId == selfConversationId || find(conversationId)?.isSelf == true
+
+    /** GET /conversations/self：幂等，拿到 id 记下。旧后端（没有这个接口）静默跳过；网络问题下次刷新再试 */
+    private suspend fun ensureSelf() {
+        if (selfConversationId != null || !selfSupported) return
+        try {
+            val conversation = KcJson.decodeFromJsonElement(Conversation.serializer(), api.get("/conversations/self"))
+            if (conversation.isSelf) selfConversationId = conversation.id else selfSupported = false
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: ink.kuke.chat.core.net.ApiException) {
+            // 旧后端：没有这个路由（404 / 405），或者把 self 当成会话 id 去解析（422）
+            if (e.status == 404 || e.status == 405 || e.status == 422) selfSupported = false
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 列表里「我的设备」的 unread_count 恒为 0：换成本地算的。
+     * 离线期间另一台设备发来的（列表上的最后一条比「算到」的新）：拉一页消息，把「上次看到」之后另一类设备发的条数算进未读（3.3）。
+     */
+    private suspend fun withSelfUnread(list: List<Conversation>): List<Conversation> {
+        val store = selfStore ?: return list
+        val self = list.firstOrNull { it.isSelf } ?: return list
+        selfConversationId = self.id
+        val last = self.lastMessage?.id ?: 0L
+        when {
+            last <= 0L -> Unit
+            // 第一次用（本机没记过）：之前的历史不算未读
+            store.seen == 0L -> store.markSeen(last)
+            last > store.counted -> runCatching {
+                val page = KcJson.decodeFromJsonElement(ListSerializer(Message.serializer()), api.get("/conversations/${self.id}/messages?limit=50") as JsonArray)
+                val seen = store.seen
+                val count = page.count { it.id > seen && !it.isRecalled && it.type != "system" && SelfDevice.fromOtherDevice(it) }
+                if (visibleConversationId == self.id) store.markSeen(maxOf(last, page.maxOfOrNull { it.id } ?: 0L))
+                else store.write(unread = count, counted = maxOf(last, page.maxOfOrNull { it.id } ?: 0L))
+            }
+        }
+        val unread = store.unread
+        return list.map { if (it.id == self.id) it.copy(unreadCount = unread, mentionPending = null) else it }
     }
 
     /** 我读到了这一条（打开会话、看到最新消息时调）：本地未读清零，再告诉服务端 */
     fun markRead(conversationId: Long, lastMessageId: Long) {
+        if (isSelf(conversationId)) {
+            // 「我的设备」：已读按人记、调了也没用（3.3），只记本机看到哪儿了
+            selfStore?.markSeen(lastMessageId)
+            _items.update { list -> list.map { if (it.id == conversationId) it.copy(unreadCount = 0, mentionPending = null) else it } }
+            return
+        }
         _items.update { list -> list.map { if (it.id == conversationId) it.copy(unreadCount = 0, mentionPending = null) else it } }
         scope.launch { runCatching { api.post("/conversations/$conversationId/read", JsonObject(mapOf("last_read_message_id" to kotlinx.serialization.json.JsonPrimitive(lastMessageId)))) } }
     }
@@ -109,7 +175,12 @@ class ConversationRepository(
             return
         }
         val mine = message.senderId != null && message.senderId == currentUserId()
-        val countsAsUnread = !mine && message.type != "system" && visibleConversationId != message.conversationId
+        val countsAsUnread = if (existing.isSelf) {
+            // 「我的设备」：另一类设备（电脑）发来的才算未读（3.3）
+            val counts = SelfDevice.fromOtherDevice(message) && message.type != "system" && visibleConversationId != message.conversationId
+            if (counts) selfStore?.increment(message.id) else selfStore?.noteCounted(message.id)
+            counts
+        } else !mine && message.type != "system" && visibleConversationId != message.conversationId
         val packetPending = message.type == "red_packet" && redPacketClaimable(message, existing, mine)
         _items.update { list ->
             sort(list.map {
@@ -117,7 +188,7 @@ class ConversationRepository(
                 else it.copy(
                     lastMessage = message,
                     updatedAt = message.createdAt,
-                    unreadCount = it.unreadCount + if (countsAsUnread) 1 else 0,
+                    unreadCount = if (existing.isSelf && selfStore != null) selfStore.unread else it.unreadCount + if (countsAsUnread) 1 else 0,
                     redPacketPending = it.redPacketPending || packetPending,
                 )
             })
@@ -138,8 +209,8 @@ class ConversationRepository(
     private fun applyRead(data: JsonObject) {
         val conversationId = data["conversation_id"]?.jsonPrimitive?.longOrNull ?: return
         val userId = data["user_id"]?.jsonPrimitive?.longOrNull
-        // 我在别的设备上读过了：这边也清零
-        if (userId != null && userId == currentUserId()) {
+        // 我在别的设备上读过了：这边也清零（「我的设备」的未读是按设备算的，别的设备读过不算）
+        if (userId != null && userId == currentUserId() && !isSelf(conversationId)) {
             _items.update { list -> list.map { if (it.id == conversationId) it.copy(unreadCount = 0, mentionPending = null) else it } }
         }
     }
