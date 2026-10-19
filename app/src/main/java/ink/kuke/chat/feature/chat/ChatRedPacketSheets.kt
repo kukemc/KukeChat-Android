@@ -66,9 +66,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -86,6 +88,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -142,6 +145,12 @@ internal object RpColors {
     val GoldLight = Color(0xFFFFF0C2)
     val GoldDeep = Color(0xFFE8A93A)
     val Ink = Color(0xFF7A2A0C)
+    /** 金币、「開」按钮的面：纯色，不做渐变 */
+    val CoinFace = Color(0xFFF6CD78)
+    /** 金币内圈、描边 */
+    val CoinRing = Color(0xFFD9A443)
+    /** 红包正面的「信纸」 */
+    val Paper = Color(0xFFFFF4DF)
     /** 金额数字：浅色主题偏深金，深色主题偏亮金 */
     @Composable
     fun amount(): Color = if (KcTheme.colors.isDark) Color(0xFFF5C86A) else Color(0xFFC9801A)
@@ -775,7 +784,7 @@ private fun RpNote(text: String, danger: Boolean, action: String? = null, onActi
     }
 }
 
-/** 红包主按钮：红色渐变、按下微缩 */
+/** 红包主按钮：纯红、按下微缩 */
 @Composable
 internal fun RedButton(text: String, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val press = rememberInteraction()
@@ -784,7 +793,7 @@ internal fun RedButton(text: String, enabled: Boolean, modifier: Modifier = Modi
             .height(50.dp)
             .pressScale(press)
             .clip(RoundedCornerShape(14.dp))
-            .background(Brush.horizontalGradient(listOf(RpColors.FlapTop, RpColors.RedDeep)))
+            .background(RpColors.Red)
             .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .clickable(interactionSource = press, indication = null, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -793,13 +802,13 @@ internal fun RedButton(text: String, enabled: Boolean, modifier: Modifier = Modi
     }
 }
 
-/** 一枚小金币：金色径向渐变 + 内圈 */
+/** 一枚小金币：纯色金面 + 内圈 */
 @Composable
 internal fun CoinGlyph(size: Dp, modifier: Modifier = Modifier) {
     Canvas(modifier.size(size)) {
         val r = this.size.minDimension / 2f
-        drawCircle(Brush.radialGradient(listOf(RpColors.GoldLight, RpColors.Gold, RpColors.GoldDeep), center = Offset(r * 0.7f, r * 0.7f), radius = r * 1.3f), r)
-        drawCircle(RpColors.GoldDeep.copy(alpha = 0.7f), r * 0.66f, style = androidx.compose.ui.graphics.drawscope.Stroke(width = r * 0.12f))
+        drawCircle(RpColors.CoinFace, r)
+        drawCircle(RpColors.CoinRing, r * 0.64f, style = androidx.compose.ui.graphics.drawscope.Stroke(width = r * 0.11f))
     }
 }
 
@@ -1029,7 +1038,7 @@ private fun EnvelopeFace(
             .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
             .shadow(24.dp, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
-            .background(Brush.verticalGradient(listOf(RpColors.RedDeep, RpColors.RedDark)))
+            .background(RpColors.RedDeep)
             .swallowClicks(),
     ) {
         val flapHeight = maxHeight * 0.66f
@@ -1044,7 +1053,7 @@ private fun EnvelopeFace(
                 .height(maxHeight * 0.42f)
                 .graphicsLayer { alpha = flap }
                 .clip(RoundedCornerShape(12.dp))
-                .background(Brush.verticalGradient(listOf(Color(0xFFFFF7E6), Color(0xFFFFE7BE)))),
+                .background(RpColors.Paper),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -1120,16 +1129,22 @@ private fun EnvelopeFace(
                     quadraticTo(size.width / 2f, size.height + dip * 0.9f, 0f, size.height - dip)
                     close()
                 }
-                drawPath(path, Brush.verticalGradient(listOf(RpColors.FlapTop, RpColors.FlapBottom), endY = size.height))
-                // 封口下沿一道暗影，显出层次
-                drawPath(path, Color.Black.copy(alpha = 0.10f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
+                // 封口下沿先垫一道柔和的影子（往下错开几像素），再画纯色封口：靠影子分层次，不靠渐变
+                translate(top = 3.dp.toPx()) { drawPath(path, Color.Black.copy(alpha = 0.12f)) }
+                drawPath(path, RpColors.FlapBottom)
             }
+            // 封口上的字只占「開」以上的那一截：口令 / 祝福语太长时自动缩小字号，不会压到「開」底下
+            val compact = voiceMode || chainText != null
             Column(
-                Modifier.fillMaxWidth().padding(top = 44.dp, start = 22.dp, end = 22.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .height(flapHeight - coinSize / 2 - 10.dp)
+                    .padding(top = if (compact) 30.dp else 40.dp, start = 22.dp, end = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Box(Modifier.size(60.dp).clip(CircleShape).background(RpColors.Gold.copy(alpha = 0.6f)).padding(2.dp)) {
-                    Avatar(packet?.senderAvatar, packet?.senderName ?: "红包", tone = packet?.senderId ?: 0, size = 56.dp)
+                val avatarSize = if (compact) 46.dp else 56.dp
+                Box(Modifier.size(avatarSize + 4.dp).clip(CircleShape).background(RpColors.CoinFace.copy(alpha = 0.7f)).padding(2.dp)) {
+                    Avatar(packet?.senderAvatar, packet?.senderName ?: "红包", tone = packet?.senderId ?: 0, size = avatarSize)
                 }
                 Text(
                     "${packet?.senderName ?: "有人"} 发出的红包",
@@ -1153,51 +1168,45 @@ private fun EnvelopeFace(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
-                if (voiceMode && voiceText != null) {
-                    // 语音红包：要念的口令用大字写在封口上，祝福语退到下面一行
-                    Text(
-                        "「$voiceText」",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.W700,
-                        lineHeight = 32.sp,
-                        color = RpColors.GoldLight,
-                        textAlign = TextAlign.Center,
+                // 剩下的高度给口令 / 祝福语（放不下就缩字号）和下面那行小字
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    val voiceLine = voiceMode && voiceText != null
+                    val chainLine = chainText != null && ended == null && !forOthers && packet?.claimedByMe != true
+                    FitText(
+                        text = if (voiceLine) "「$voiceText」" else if (ended != null) endedSentence(ended) else packet?.greeting ?: meta.greeting,
+                        maxSize = if (voiceLine) 22.sp else 21.sp,
+                        minSize = 14.sp,
                         maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 14.dp),
-                    )
-                    Text(
-                        "说出这句口令就能领 · ${packet?.greeting ?: meta.greeting}",
-                        style = type.caption,
-                        color = Color.White.copy(alpha = 0.78f),
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                } else {
-                    Text(
-                        if (ended != null) endedSentence(ended) else packet?.greeting ?: meta.greeting,
-                        fontSize = 21.sp,
-                        fontWeight = FontWeight.W600,
+                        fontWeight = if (voiceLine) FontWeight.W700 else FontWeight.W600,
                         color = RpColors.GoldLight,
-                        textAlign = TextAlign.Center,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 16.dp),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
-                }
-                // 接龙：先说清楚领了会替我发什么
-                if (chainText != null && ended == null && !forOthers && packet?.claimedByMe != true) {
-                    Text(
-                        "领取后会以你的身份发出「$chainText」",
-                        style = type.caption,
-                        color = Color.White.copy(alpha = 0.78f),
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
+                    when {
+                        // 语音红包：口令是大字，祝福语退到下面一行（「按住说出口令领取」在「開」下面，这里不重复）
+                        voiceLine -> Text(
+                            packet?.greeting ?: meta.greeting,
+                            style = type.caption,
+                            color = Color.White.copy(alpha = 0.72f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        // 接龙：先说清楚领了会替我发什么
+                        chainLine -> Text(
+                            "领取后会以你的身份发出「$chainText」",
+                            style = type.caption,
+                            color = Color.White.copy(alpha = 0.78f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
                 }
             }
             // 关闭
@@ -1400,10 +1409,11 @@ private fun OpenCoin(
                 scaleX *= breath.value
                 scaleY *= breath.value
             }
-            .shadow(10.dp, CircleShape)
+            .shadow(8.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.3f), spotColor = Color.Black.copy(alpha = 0.3f))
             .clip(CircleShape)
-            .background(Brush.radialGradient(listOf(RpColors.GoldLight, RpColors.Gold, RpColors.GoldDeep)))
-            .border(3.dp, RpColors.GoldDeep.copy(alpha = 0.55f), CircleShape)
+            .background(RpColors.CoinFace)
+            // 纯色金面 + 一道细内圈，像一枚压出来的币
+            .drawBehind { drawCircle(RpColors.CoinRing.copy(alpha = 0.55f), this.size.minDimension / 2f - 7.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())) }
             .then(hold ?: Modifier.clickable(interactionSource = press, indication = null, enabled = enabled, onClick = onClick)),
         contentAlignment = Alignment.Center,
     ) {
@@ -1419,6 +1429,38 @@ private fun OpenCoin(
             )
         }
     }
+}
+
+/**
+ * 放不下就缩字号的文字：从 [maxSize] 起，每次排版溢出（超出行数或高度）就小 1sp，最小到 [minSize]（还放不下才省略）。
+ * 字号定下来之前不画，免得看到一帧大字。
+ */
+@Composable
+private fun FitText(
+    text: String,
+    maxSize: TextUnit,
+    minSize: TextUnit,
+    maxLines: Int,
+    fontWeight: FontWeight,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    var size by remember(text) { mutableStateOf(maxSize) }
+    var settled by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        fontSize = size,
+        lineHeight = size * 1.3f,
+        fontWeight = fontWeight,
+        color = color,
+        textAlign = TextAlign.Center,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { result ->
+            if (result.hasVisualOverflow && size.value > minSize.value) size = (size.value - 1f).sp else settled = true
+        },
+        modifier = modifier.drawWithContent { if (settled) drawContent() },
+    )
 }
 
 /** 一个红包「多久被抢完」 */
@@ -1487,7 +1529,7 @@ private fun ClaimDetail(
                     quadraticTo(size.width / 2f, size.height + dip, 0f, size.height - dip)
                     close()
                 }
-                drawPath(path, Brush.verticalGradient(listOf(RpColors.FlapTop, RpColors.RedDeep), endY = size.height))
+                drawPath(path, RpColors.Red)
             }
             Box(
                 Modifier.padding(8.dp).size(36.dp).clip(CircleShape).clickable(onClick = onClose),

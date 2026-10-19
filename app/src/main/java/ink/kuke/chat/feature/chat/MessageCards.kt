@@ -150,10 +150,11 @@ private fun remainingLabel(closesAt: String?): String {
 }
 
 /** 红包卡的两套底色：可领是正红，已领 / 领完 / 过期 / 撤回是褪色的橘红（同微信拆过的红包） */
-private val CardLive = listOf(Color(0xFFF4644C), Color(0xFFDE3B2E))
-private val CardLiveStrip = Color(0xFFC73127)
-private val CardDim = listOf(Color(0xFFF3A287), Color(0xFFE8876D))
-private val CardDimStrip = Color(0xFFD97A61)
+// 红包卡片：纯色，不做渐变（领过 / 领完褪成浅一档）
+private val CardLive = Color(0xFFE9493A)
+private val CardLiveStrip = Color(0xFFCF3A2C)
+private val CardDim = Color(0xFFEC9580)
+private val CardDimStrip = Color(0xFFDB7F69)
 
 /**
  * 红包卡：红底金封（「福」字金章）+ 祝福语 + 状态，底条写种类与进度。
@@ -212,7 +213,7 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(Brush.linearGradient(listOf(lerp(CardLive[0], CardDim[0], fade), lerp(CardLive[1], CardDim[1], fade))))
+                .background(lerp(CardLive, CardDim, fade))
                 .drawBehind {
                     // 右上一道浅弧，像信封的封口
                     drawCircle(Color.White.copy(alpha = 0.08f), radius = size.height * 1.1f, center = Offset(size.width * 1.02f, -size.height * 0.35f))
@@ -224,10 +225,9 @@ internal fun RedPacketCard(message: Message, meta: RedPacketMeta, callbacks: Mes
                     Modifier
                         .size(40.dp)
                         .graphicsLayer { alpha = 1f - 0.35f * fade }
-                        .shadow(2.dp, CircleShape)
                         .clip(CircleShape)
-                        .background(Brush.radialGradient(listOf(Color(0xFFFFF0C2), Color(0xFFFFD98A), Color(0xFFE8A93A))))
-                        .border(1.5.dp, Color(0xFFE8A93A).copy(alpha = 0.6f), CircleShape),
+                        .background(RpColors.CoinFace)
+                        .border(1.dp, RpColors.CoinRing.copy(alpha = 0.7f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) { Text("福", fontSize = 19.sp, fontWeight = FontWeight.W700, color = Color(0xFFB0281C)) }
                 Column(Modifier.padding(start = 10.dp)) {

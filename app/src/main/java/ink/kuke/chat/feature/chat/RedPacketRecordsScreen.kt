@@ -33,7 +33,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -195,14 +194,14 @@ fun RedPacketRecordsScreen(graph: AppGraph) {
     }
 }
 
-/** 顶部合计：红底金字，右上一枚装饰金币 */
+/** 顶部合计：纯红底金字，右上两道浅弧做装饰 */
 @Composable
 private fun SummaryCard(sent: Boolean, sum: Int?, count: Int) {
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Brush.linearGradient(listOf(RpColors.FlapTop, RpColors.RedDeep), start = Offset.Zero, end = Offset(900f, 600f))),
+            .background(RpColors.Red),
     ) {
         Canvas(Modifier.matchParentSize()) {
             drawCircle(Color.White.copy(alpha = 0.07f), radius = size.height * 0.9f, center = Offset(size.width * 0.95f, -size.height * 0.15f))
@@ -239,7 +238,7 @@ private fun RecordRow(record: RedPacketRecord, sent: Boolean, onClick: () -> Uni
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(Brush.verticalGradient(listOf(RpColors.FlapTop, RpColors.RedDeep))),
+            Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(RpColors.Red),
             contentAlignment = Alignment.Center,
         ) { KcIcon(KcIcons.redPacket, tint = RpColors.Gold, size = 22.dp) }
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {

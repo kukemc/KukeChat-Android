@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -288,10 +288,15 @@ fun ConversationListScreen(graph: AppGraph, onOpen: (Long) -> Unit, drawer: Prof
                     visible.isEmpty() && error != null -> Center(error!!)
                     visible.isEmpty() -> Center("还没有会话，去联系人里找好友聊聊吧")
                     else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = ink.kuke.chat.ui.shell.LocalBottomBarSpace.current + 8.dp)) {
-                        items(visible, key = { it.id }) { conversation ->
-                            androidx.compose.foundation.layout.Box(Modifier.animateItem()) {
+                        itemsIndexed(visible, key = { _, it -> it.id }) { index, conversation ->
+                            // 连着的几个置顶会话画成一整块：只有这一块的头尾是圆角，块下面空一点再接普通会话
+                            val pinTop = conversation.pinned && visible.getOrNull(index - 1)?.pinned != true
+                            val pinBottom = conversation.pinned && visible.getOrNull(index + 1)?.pinned != true
+                            androidx.compose.foundation.layout.Box(Modifier.animateItem().padding(bottom = if (pinBottom) 6.dp else 0.dp)) {
                             SwipeConversationRow(
                                 conversation = conversation,
+                                pinTop = pinTop,
+                                pinBottom = pinBottom,
                                 draft = drafts[conversation.id],
                                 opened = openedSwipe == conversation.id,
                                 onOpenedChange = { open -> openedSwipe = if (open) conversation.id else if (openedSwipe == conversation.id) null else openedSwipe },
@@ -400,6 +405,8 @@ private val SwipeMute = Color(0xFF7B8394)
 @Composable
 private fun SwipeConversationRow(
     conversation: Conversation,
+    pinTop: Boolean,
+    pinBottom: Boolean,
     draft: String?,
     opened: Boolean,
     onOpenedChange: (Boolean) -> Unit,
@@ -490,6 +497,8 @@ private fun SwipeConversationRow(
         ) {
             ConversationRow(
                 conversation = conversation,
+                pinTop = pinTop,
+                pinBottom = pinBottom,
                 draft = draft,
                 onClick = {
                     if (opened || offset.value != 0f) {
@@ -518,18 +527,26 @@ private fun ActionCell(label: String, color: Color, modifier: Modifier, onClick:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationRow(conversation: Conversation, draft: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun ConversationRow(conversation: Conversation, pinTop: Boolean, pinBottom: Boolean, draft: String?, onClick: () -> Unit, onLongClick: () -> Unit) {
     val colors = KcTheme.colors
     val type = KcTheme.type
     val unread = conversation.unreadCount
     val name = conversation.name()
     val avatarUrl = if (conversation.isGroup) conversation.avatarUrl else conversation.directUser?.avatarUrl ?: conversation.avatarUrl
+    val shape = if (conversation.pinned) {
+        RoundedCornerShape(
+            topStart = if (pinTop) 14.dp else 0.dp,
+            topEnd = if (pinTop) 14.dp else 0.dp,
+            bottomStart = if (pinBottom) 14.dp else 0.dp,
+            bottomEnd = if (pinBottom) 14.dp else 0.dp,
+        )
+    } else RoundedCornerShape(12.dp)
     Row(
         Modifier
             .fillMaxWidth()
             .height(72.dp)
             .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(shape)
             .background(if (conversation.pinned) colors.text.copy(alpha = 0.045f) else colors.list)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 8.dp),
