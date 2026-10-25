@@ -21,6 +21,7 @@ import kotlinx.serialization.json.longOrNull
  *   · 实时事件 user.cosmetics.updated 收到的最新一份记在 [live] 里，压过 payload（不用去改各处缓存）；
  *   · 自己的另有一份跟着登录用户走（[mine]）。
  * 解析结果按 style 记住，同一件装扮全屏只解析一次。只在主线程用。
+ * 气泡的专属字体（docs/shop.md 2.6）在 style 旁边（cosmetics.bubble.font），本人关掉了字体就没有；和皮肤并在一起。
  */
 object Cosmetics {
     private val live = mutableStateMapOf<Long, JsonObject>()
@@ -59,9 +60,11 @@ object Cosmetics {
         return cached(frames, style) { parseAvatarFrame(it) }
     }
 
+    /** 气泡皮肤连同专属字体：按整个 bubble 槽（sku、style、font）记住 */
     fun bubble(cosmetics: JsonObject?): BubbleSkin? {
-        val style = styleOf(cosmetics, "bubble") ?: return null
-        return cached(bubbles, style) { parseBubbleSkin(it) }
+        val slot = cosmetics?.get("bubble") as? JsonObject ?: return null
+        if (slot["style"] == null) return null
+        return cached(bubbles, slot) { parseBubbleSkin(slot["style"])?.withFont(readSkinFont(slot["font"])) }
     }
 
     private fun <T> cached(map: HashMap<JsonElement, T?>, key: JsonElement, parse: (JsonElement) -> T?): T? {

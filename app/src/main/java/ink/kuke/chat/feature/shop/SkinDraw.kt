@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.ShaderBrush
@@ -94,7 +95,27 @@ private fun alternate(t: Float, duration: Float, delay: Float): Float {
     return CssEase.transform(f)
 }
 
+/** infinite alternate、不带缓动：0 → 1 → 0 …（多段关键帧自己按段缓动） */
+private fun pingPong(t: Float, duration: Float, delay: Float): Float {
+    val x = (t - delay) / duration
+    val k = floor(x)
+    val f = x - k
+    return if (k.toLong() % 2L != 0L) 1f - f else f
+}
+
 private fun lerp(a: Float, b: Float, f: Float) = a + (b - a) * f
+
+/** 按关键帧（位置升序，首尾是 0 和 1）线性插值 */
+private fun keyframes(c: Float, frames: FloatArray, values: FloatArray): Float {
+    for (i in 1 until frames.size) {
+        if (c <= frames[i]) return lerp(values[i - 1], values[i], (c - frames[i - 1]) / (frames[i] - frames[i - 1]))
+    }
+    return values.last()
+}
+
+/** flicker（.kcaf-flicker）：霓虹灯管接触不良，4.2 秒一轮，大部分时间是亮的 */
+private val FlickerAt = floatArrayOf(0f, 0.09f, 0.10f, 0.12f, 0.13f, 0.44f, 0.45f, 0.47f, 0.48f, 1f)
+private val FlickerOpacity = floatArrayOf(1f, 1f, 0.35f, 0.8f, 1f, 1f, 0.5f, 1f, 0.7f, 1f)
 
 private fun seedStep(seed: Long): Int = (((seed % 9) + 9) % 9).toInt()
 
@@ -183,6 +204,20 @@ private inline fun DrawScope.withMotion(motion: OrnamentMotion?, t: Float, delay
             withTransform({ rotate(deg, Offset(0f, box * 0.42f)) }) { block(1f) }
         }
         OrnamentMotion.Flap -> withTransform({ rotate(lerp(5f, -8f, alternate(t, 3.6f, delay)), Offset(-box * 0.42f, box * 0.14f)) }) { block(1f) }
+        // 光标：1.1 秒里前 55% 亮着，之后暗到 0.12，不渐变
+        OrnamentMotion.Blink -> block(if (cycle(t, 1.1f, delay) < 0.56f) 1f else 0.12f)
+        OrnamentMotion.Burn -> {
+            // 火苗绕着底部（50% 92%）一窜一窜：1.6 秒来回，0% scale(1,1) → 40% scale(.94,1.08) skewX(-3°) → 100% scale(1.04,.95) skewX(3°)，每段 ease-in-out
+            val x = pingPong(t, 1.6f, delay)
+            val first = x < 0.4f
+            val f = CssEase.transform(if (first) x / 0.4f else (x - 0.4f) / 0.6f)
+            val sx = if (first) lerp(1f, 0.94f, f) else lerp(0.94f, 1.04f, f)
+            val sy = if (first) lerp(1f, 1.08f, f) else lerp(1.08f, 0.95f, f)
+            val skew = if (first) lerp(0f, -3f, f) else lerp(-3f, 3f, f)
+            val oy = box * 0.42f
+            val skewMatrix = Matrix().apply { values[Matrix.SkewX] = tan(Math.toRadians(skew.toDouble())).toFloat() }
+            withTransform({ translate(0f, oy); scale(sx, sy, Offset.Zero); transform(skewMatrix); translate(0f, -oy) }) { block(1f) }
+        }
     }
 }
 
@@ -191,7 +226,7 @@ private inline fun DrawScope.withMotion(motion: OrnamentMotion?, t: Float, delay
 private const val SHIMMER_SKEW = -16f
 
 /**
- * 给气泡铺上皮肤：阴影 → 底色 → 呼吸的光晕 → 流动的渐变 → 纹样 → 扫光 → （内容、边框）→ 角饰。
+ * 给气泡铺上皮肤：阴影 → 底色 → 呼吸的光晕 → 流动的渐变 → 纹样 → 扫光 / 扫描线 → （内容、边框）→ 角饰。
  * 只管画，不管内边距：调用方接着 .padding(…) 放内容。角饰探出气泡之外，外面的布局别裁切。
  */
 @Composable
@@ -203,8 +238,9 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
     val flow = animation == BubbleAnimation.Flow && paint.fill.isGradient
     val shimmer = animation == BubbleAnimation.Shimmer
     val breathe = animation == BubbleAnimation.Breathe
+    val scan = animation == BubbleAnimation.Scan
     val ornaments = skin.ornaments
-    val moving = flow || shimmer || breathe || (!reduced && ornaments.any { it.animated })
+    val moving = flow || shimmer || breathe || scan || (!reduced && ornaments.any { it.animated })
     val clock = if (moving) rememberSkinClock() else null
     val step = seedStep(seed)
     val fxDelay = -(step * 0.9f)
@@ -247,6 +283,12 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
             Brush.horizontalGradient(0f to Color.White.copy(alpha = 0f), 0.5f to peak, 1f to Color.White.copy(alpha = 0f), startX = -bandWidth / 2f, endX = bandWidth / 2f)
         } else null
         val skew = tan(Math.toRadians(SHIMMER_SKEW.toDouble())).toFloat()
+        // scan：一道和字同色的淡光带（高 36%），从透明到字色 22%（70% 处）再到 34%（底边）
+        val scanHeight = h * 0.36f
+        val scanBrush = if (scan) {
+            val text = paint.text
+            Brush.verticalGradient(0f to text.copy(alpha = 0f), 0.7f to text.copy(alpha = text.alpha * 0.22f), 1f to text.copy(alpha = text.alpha * 0.34f), startY = 0f, endY = scanHeight)
+        } else null
         onDrawWithContent {
             val t = clock?.value ?: 0f
             if (breathe) {
@@ -254,7 +296,7 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
                 clipPath(path, ClipOp.Difference) { glowOuter.forEach { (p, gp) -> drawNative(p, gp, a) } }
                 if (glowInner != null) clipPath(path) { drawNative(path, glowInner, a) }
             }
-            if (flowBrush != null || pattern != null || shine != null) {
+            if (flowBrush != null || pattern != null || shine != null || scanBrush != null) {
                 clipPath(path) {
                     if (flowBrush != null) {
                         // flow：同一幅渐变放大一圈（四周各 60%），在气泡后面来回平移 ±17% / ±12%，13 秒走一趟
@@ -273,6 +315,12 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
                             drawRect(shine, topLeft = Offset(-bandWidth / 2f, -h * 0.8f), size = Size(bandWidth, h * 1.6f))
                         }
                     }
+                    if (scanBrush != null) {
+                        // 五秒一趟：前 60% 从 translateY(-110%) 匀速走到 290%（按光带自己的高度），之后停在下面外面
+                        val c = cycle(t, 5f, fxDelay)
+                        val y = lerp(-1.1f, 2.9f, min(1f, c / 0.6f)) * scanHeight
+                        translate(0f, y) { drawRect(scanBrush, size = Size(w, scanHeight)) }
+                    }
                 }
             }
             drawContent()
@@ -284,7 +332,7 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
                 val oy = max(o.size * ORNAMENT_RISE, o.size - ORNAMENT_INSET) * density
                 val left = if (o.corner[1] == 'l') -ox else w - s + ox
                 val top = if (o.corner[0] == 't') -oy else h - s + oy
-                val motion = if (o.animated && !reduced) ornamentMotion(o.key).takeIf { it != OrnamentMotion.Twitch && it != OrnamentMotion.Flap } else null
+                val motion = if (o.animated && !reduced) ornamentMotion(o.key).takeIf { it != OrnamentMotion.Twitch && it != OrnamentMotion.Flap && it != OrnamentMotion.Burn } else null
                 val delay = -((step + index * 4) % 9) * 0.6f
                 translate(left + s / 2f, top + s / 2f) {
                     withMotion(motion, t, delay, s, density) { alpha ->
@@ -303,6 +351,7 @@ fun Modifier.bubbleSkin(skin: BubbleSkin, paint: SkinPaint, shape: Shape, seed: 
 
 /**
  * 头像外圈的装饰（.kcaf）：外发光 → 垫在头像后面的装饰 → （头像）→ 环（spin 转、shimmer 扫光）→ 压在环上的装饰。
+ * flicker 时外发光和环（连同上面的光）一起闪。
  * 不占布局，全部画在自身边界之外（父布局别裁切）；尺寸按 40dp 头像计、按实际大小等比缩放。
  * [rounded] 跟随外观里的「圆角方形头像」；[seed] 传用户 id，把不同人的节奏错开。
  */
@@ -315,7 +364,8 @@ fun Modifier.frameDecor(frame: AvatarFrame, rounded: Boolean, seed: Long = 0): M
     val spin = animation == FrameAnimation.Spin && fp.fill.isGradient
     val shine = animation == FrameAnimation.Shimmer
     val pulse = animation == FrameAnimation.Pulse && fp.glow != null
-    val moving = spin || shine || pulse || (!reduced && frame.pieces.any { it.animated })
+    val flicker = animation == FrameAnimation.Flicker
+    val moving = spin || shine || pulse || flicker || (!reduced && frame.pieces.any { it.animated })
     val clock = if (moving) rememberSkinClock() else null
     val step = seedStep(seed)
     val ringDelay = -(step * 0.9f)
@@ -368,9 +418,10 @@ fun Modifier.frameDecor(frame: AvatarFrame, rounded: Boolean, seed: Long = 0): M
         }
         onDrawWithContent {
             val t = clock?.value ?: 0f
+            val lit = if (flicker) keyframes(cycle(t, 4.2f, ringDelay), FlickerAt, FlickerOpacity) else 1f
             inset(-out, -out, -out, -out) {
                 if (glow != null) {
-                    val a = if (pulse) lerp(0.3f, 1f, alternate(t, 3.8f, ringDelay)) else 1f
+                    val a = (if (pulse) lerp(0.3f, 1f, alternate(t, 3.8f, ringDelay)) else 1f) * lit
                     clipPath(ringBox, ClipOp.Difference) {
                         if (BlurSupported) drawNative(glow.first, glow.second, a) else drawRect(glow.third, topLeft = Offset(-box, -box), size = Size(box * 3, box * 3), alpha = a)
                     }
@@ -384,11 +435,11 @@ fun Modifier.frameDecor(frame: AvatarFrame, rounded: Boolean, seed: Long = 0): M
                     // spin：一块铺了环底色的方块（四周各大 21%）在环里慢慢转，十二秒一圈
                     clipPath(ring) {
                         rotate(cycle(t, 12f, ringDelay) * 360f, Offset(box / 2f, box / 2f)) {
-                            inset(-0.21f * box, -0.21f * box, -0.21f * box, -0.21f * box) { drawRect(spinBrush) }
+                            inset(-0.21f * box, -0.21f * box, -0.21f * box, -0.21f * box) { drawRect(spinBrush, alpha = lit) }
                         }
                     }
                 } else {
-                    drawPath(ring, ringBrush)
+                    drawPath(ring, ringBrush, alpha = lit)
                 }
                 if (shineBrush != null) {
                     // shimmer：一段弧形的光沿着环走一圈，七秒里 62% 之后才走，淡入、走完淡出
@@ -402,7 +453,7 @@ fun Modifier.frameDecor(frame: AvatarFrame, rounded: Boolean, seed: Long = 0): M
                     val angle = if (c < 0.62f) -40f else lerp(-40f, 320f, ShineEase.transform((c - 0.62f) / 0.38f))
                     if (opacity > 0f) clipPath(ring) {
                         rotate(angle, Offset(box / 2f, box / 2f)) {
-                            inset(-0.21f * box, -0.21f * box, -0.21f * box, -0.21f * box) { drawRect(shineBrush, alpha = opacity) }
+                            inset(-0.21f * box, -0.21f * box, -0.21f * box, -0.21f * box) { drawRect(shineBrush, alpha = opacity * lit) }
                         }
                     }
                 }

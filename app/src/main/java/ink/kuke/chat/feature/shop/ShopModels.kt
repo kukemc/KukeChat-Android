@@ -9,7 +9,7 @@ import java.time.Instant
 
 /*
  * 商店接口的数据（契约：KukeChat-Server/docs/shop.md）。商品的 style 原样留着（JsonElement），
- * 画之前由 BubbleSkin.kt 的 parse 校验。
+ * 画之前由 SkinPaint.kt 的 parse 校验。
  */
 
 @Serializable
@@ -30,6 +30,10 @@ data class ShopItem(
     @SerialName("available_until") val availableUntil: String? = null,
     @SerialName("duration_days") val durationDays: Int? = null,
     @SerialName("expires_at") val expiresAt: String? = null,
+    /** 气泡的专属字体 { key, name, woff2, ttf }（docs/shop.md 2.6），没有为 null；用之前过 readSkinFont */
+    val font: JsonElement? = null,
+    /** 装备着它、它有专属字体时我开没开字体；其余情况恒为 true。旧后端没有这个字段，按开着 */
+    @SerialName("font_enabled") val fontEnabled: Boolean = true,
     @SerialName("is_active") val isActive: Boolean? = null,
     val owned: Boolean = false,
     val equipped: Boolean = false,

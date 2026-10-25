@@ -305,6 +305,35 @@ internal class VoiceSession(
 }
 
 /**
+ * 要麦克风权限。拒过一次后系统仍会再弹；再拒（或勾了「不再询问」）系统就不弹了，launch 会直接回「拒绝」——
+ * 这时 shouldShowRequestPermissionRationale 为 false，只能带用户去应用设置里手动打开。
+ */
+@Composable
+internal fun rememberMicPermission(deniedHint: String): () -> Unit {
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) return@rememberLauncherForActivityResult
+        var c = context
+        while (c is android.content.ContextWrapper && c !is android.app.Activity) c = c.baseContext
+        val activity = c as? android.app.Activity
+        if (activity != null && !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            toast(context, "麦克风权限已关闭，请在设置 › 权限里打开")
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:${context.packageName}"),
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        } else {
+            toast(context, deniedHint)
+        }
+    }
+    return { launcher.launch(Manifest.permission.RECORD_AUDIO) }
+}
+
+/**
  * 按住说话：按下开始录，上滑超过 72dp 或左滑到 ✕ = 松手取消，右滑到锁 = 松手锁定继续录，原地松手发送。
  * 起点离 ✕ / 锁太近时，至少再滑 48dp 才算进入。进出区域轻震一下。
  */
@@ -315,7 +344,7 @@ internal fun HoldToTalk(session: VoiceSession) {
     val view = LocalView.current
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
-    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val askMic = rememberMicPermission("没有麦克风权限，发不了语音")
     val origin = remember { floatArrayOf(0f, 0f) }
     val nudge = with(density) { 48.dp.toPx() }
     val upCancel = with(density) { 72.dp.toPx() }
@@ -332,7 +361,7 @@ internal fun HoldToTalk(session: VoiceSession) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                        askMic.launch(Manifest.permission.RECORD_AUDIO)
+                        askMic()
                         return@awaitEachGesture
                     }
                     if (!session.start()) {

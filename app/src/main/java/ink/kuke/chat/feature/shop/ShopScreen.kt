@@ -49,6 +49,7 @@ import ink.kuke.chat.core.net.KcJson
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.core.ui.parseInstant
 import ink.kuke.chat.feature.settings.CenterText
+import ink.kuke.chat.feature.settings.KcSwitch
 import ink.kuke.chat.feature.settings.LoadBox
 import ink.kuke.chat.feature.settings.Loader
 import ink.kuke.chat.feature.settings.Pill
@@ -135,6 +136,16 @@ private fun ShopOverview.slotOf(category: String): String = categories.firstOrNu
 private fun ShopOverview.withEquipped(equipped: Map<String, String?>): ShopOverview =
     copy(equipped = equipped, items = items.map { it.copy(equipped = it.owned && equipped[slotOf(it.category)] == it.sku) })
 
+/**
+ * 装备之后照服务端的规则改 font_enabled（docs/shop.md 2.6）：刚装备的那件用这次的选择（没传 use_font 就保持原来的，
+ * 换了一件本来就是 true），其余一律 true。先 withEquipped 再调。
+ */
+private fun ShopOverview.withFontChoice(sku: String?, useFont: Boolean?): ShopOverview =
+    copy(items = items.map { item ->
+        val enabled = if (item.sku == sku && item.equipped) useFont ?: item.fontEnabled else true
+        if (item.fontEnabled == enabled) item else item.copy(fontEnabled = enabled)
+    })
+
 @Composable
 private fun ShopContent(graph: AppGraph, loader: Loader<ShopOverview>, shop: ShopOverview, toast: ink.kuke.chat.feature.settings.ToastState, onBuy: (ShopItem) -> Unit) {
     val colors = KcTheme.colors
@@ -164,20 +175,30 @@ private fun ShopContent(graph: AppGraph, loader: Loader<ShopOverview>, shop: Sho
     val category = categories.firstOrNull { it.key == activeKey } ?: categories.firstOrNull()
     val items = shop.items.filter { it.category == category?.key }.sortedWith(compareByDescending<ShopItem> { it.equipped }.thenByDescending { it.owned })
 
-    fun equip(item: ShopItem?, slot: String) {
+    /** 装备 / 卸下（item 为 null）。useFont 是专属字体的开关：只在切换开关时传，平常装备不传（服务端对同一件保持原来的选择） */
+    fun equip(item: ShopItem?, slot: String, useFont: Boolean? = null) {
         scope.launch {
             equipBusy = item?.sku ?: slot
             runCatching {
                 graph.api.put("/shop/equipped", buildJsonObject {
                     put("slot", slot)
                     if (item != null) put("sku", item.sku) else put("sku", JsonPrimitive(null as String?))
+                    if (useFont != null) put("use_font", useFont)
                 })
             }.onSuccess { element ->
                 val map = ((element as? JsonObject)?.get("equipped") as? JsonObject)?.mapValues { (_, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content } ?: shop.equipped
-                loader.mutate { it.withEquipped(map) }
-                // 自己的头像框、气泡马上跟着换（不等 user.cosmetics.updated）
+                loader.mutate { it.withEquipped(map).withFontChoice(item?.sku, useFont) }
+                // 自己的头像框、气泡（连同专属字体）马上跟着换（不等 user.cosmetics.updated）
                 graph.scope.launch { Cosmetics.refreshMe(graph) }
-                toast.show(if (item != null) "已换上「${item.name}」" else "已卸下", scope)
+                toast.show(
+                    when {
+                        useFont == true -> "已打开专属字体"
+                        useFont == false -> "已关掉专属字体，消息用回普通字体"
+                        item != null -> "已换上「${item.name}」"
+                        else -> "已卸下"
+                    },
+                    scope,
+                )
             }.onFailure { toast.show(it.userMessage(), scope) }
             equipBusy = null
         }
@@ -286,6 +307,17 @@ private fun ShopContent(graph: AppGraph, loader: Loader<ShopOverview>, shop: Sho
                             if (item != null && item.canRenew()) SecondaryButton("续期", onClick = { onBuy(item) }, modifier = Modifier.padding(end = 6.dp))
                             if (sku != null) SecondaryButton(if (equipBusy == cat.slot) "卸下中…" else "卸下", enabled = equipBusy == null, onClick = { equip(null, cat.slot) })
                         }
+                        // 装备着、带专属字体的气泡：用不用这件的字体（关掉之后自己和别人看到的消息都用普通字体）
+                        val font = item?.takeIf { it.equipped }?.let { readSkinFont(it.font) }
+                        if (item != null && font != null) {
+                            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f).padding(end = 10.dp)) {
+                                    Text("使用专属字体「${font.name}」", style = type.secondary, color = colors.text)
+                                    Text("关掉之后，自己和别人看到你的消息都用普通字体。", style = type.caption, color = colors.muted, modifier = Modifier.padding(top = 2.dp))
+                                }
+                                KcSwitch(item.fontEnabled, onChange = { equip(item, cat.slot, useFont = it) }, enabled = equipBusy == null)
+                            }
+                        }
                     }
                 }
             }
@@ -373,9 +405,9 @@ private fun ItemCard(item: ShopItem, level: Int, now: Long, busy: Boolean, onEqu
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(colors.panel).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (item.category == "frame") FrameStage(item.style, "我") else BubbleStage(item.style, item.previewText)
+        if (item.category == "frame") FrameStage(item.style, "我") else BubbleStage(item.style, item.previewText, font = item.font)
         Text(item.name, style = type.rowTitle, color = colors.text, fontWeight = FontWeight.W600, maxLines = 1)
-        // 标签：使用中 / 已拥有 / 有效期 / 新品·热门·限时 / 已下架 / 需更新
+        // 标签：使用中 / 已拥有 / 有效期 / 专属字体 / 新品·热门·限时 / 已下架 / 需更新
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             when (action) {
                 ItemAction.Equipped -> Pill("使用中", colors.ok)
@@ -385,6 +417,7 @@ private fun ItemCard(item: ShopItem, level: Int, now: Long, busy: Boolean, onEqu
             val owned = action == ItemAction.Equipped || action == ItemAction.Owned
             if (owned) expiryLabel(item.expiresAt, now)?.let { Pill(it.first, if (it.second) colors.danger else colors.warn) }
             else durationLabel(item.durationDaysOrNull)?.let { Pill(it, colors.warn) }
+            readSkinFont(item.font)?.let { FontTag(it.name) }
             if (item.delisted) Pill("已下架", colors.muted)
             else when (item.tag) {
                 "new" -> Pill("新品", colors.accent)
@@ -396,6 +429,19 @@ private fun ItemCard(item: ShopItem, level: Int, now: Long, busy: Boolean, onEqu
         if (item.description.isNotBlank()) Text(item.description, style = type.caption, color = colors.muted, maxLines = 2)
         PriceLine(item, action)
         ItemButton(item, action, level, busy, onEquip, onUnequip, onBuy)
+    }
+}
+
+/** 带专属字体的气泡：字体名的小标签（样子同 Pill，前面一个「字」图标） */
+@Composable
+private fun FontTag(name: String) {
+    val color = KcTheme.colors.muted
+    Row(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        KcIcon(KcIcons.type, tint = color, size = 11.dp)
+        Text(name, color = color, fontSize = 11.sp, fontWeight = FontWeight.W600, maxLines = 1, modifier = Modifier.padding(start = 3.dp))
     }
 }
 
@@ -467,7 +513,7 @@ private fun PurchaseSheet(graph: AppGraph, loader: Loader<ShopOverview>, shop: S
                 if (done) "已到手" else if (renewing) "续期「${item.name}」" else if (free) "领取「${item.name}」" else "购买「${item.name}」",
                 style = type.title, color = colors.text,
             )
-            if (item.category == "frame") FrameStage(item.style, "我") else BubbleStage(item.style, item.previewText)
+            if (item.category == "frame") FrameStage(item.style, "我") else BubbleStage(item.style, item.previewText, font = item.font)
 
             if (done) {
                 val current = loader.data?.items?.firstOrNull { it.id == item.id } ?: item
@@ -486,7 +532,7 @@ private fun PurchaseSheet(graph: AppGraph, loader: Loader<ShopOverview>, shop: S
                                 runCatching { graph.api.put("/shop/equipped", buildJsonObject { put("slot", slot); put("sku", item.sku) }) }
                                     .onSuccess { element ->
                                         val map = ((element as? JsonObject)?.get("equipped") as? JsonObject)?.mapValues { (_, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content } ?: shop.equipped
-                                        loader.mutate { it.withEquipped(map) }
+                                        loader.mutate { it.withEquipped(map).withFontChoice(item.sku, null) }
                                         graph.scope.launch { Cosmetics.refreshMe(graph) }
                                         onDismiss()
                                     }

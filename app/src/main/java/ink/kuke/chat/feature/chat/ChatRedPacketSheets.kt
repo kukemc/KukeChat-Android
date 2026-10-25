@@ -1176,16 +1176,46 @@ private fun EnvelopeFace(
                 ) {
                     val voiceLine = voiceMode && voiceText != null
                     val chainLine = chainText != null && ended == null && !forOthers && packet?.claimedByMe != true
-                    FitText(
-                        text = if (voiceLine) "「$voiceText」" else if (ended != null) endedSentence(ended) else packet?.greeting ?: meta.greeting,
-                        maxSize = if (voiceLine) 22.sp else 21.sp,
-                        minSize = 14.sp,
-                        maxLines = 3,
-                        fontWeight = if (voiceLine) FontWeight.W700 else FontWeight.W600,
-                        color = RpColors.GoldLight,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                    // 口令缩到最小字号还放不下会被省略：这时点口令展开成可滚动的全文，再点收起（录音时也能看）
+                    var phraseCut by remember(voiceText) { mutableStateOf(false) }
+                    var phraseOpen by remember(voiceText) { mutableStateOf(false) }
+                    if (voiceLine && phraseOpen) {
+                        Text(
+                            "「$voiceText」",
+                            fontSize = 16.sp,
+                            lineHeight = 22.sp,
+                            fontWeight = FontWeight.W700,
+                            color = RpColors.GoldLight,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .verticalScroll(rememberScrollState())
+                                .clickable { phraseOpen = false },
+                        )
+                    } else {
+                        FitText(
+                            text = if (voiceLine) "「$voiceText」" else if (ended != null) endedSentence(ended) else packet?.greeting ?: meta.greeting,
+                            maxSize = if (voiceLine) 22.sp else 21.sp,
+                            minSize = 14.sp,
+                            maxLines = 3,
+                            fontWeight = if (voiceLine) FontWeight.W700 else FontWeight.W600,
+                            color = RpColors.GoldLight,
+                            onSettled = { cut -> phraseCut = cut },
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .then(if (voiceLine && phraseCut) Modifier.clickable { phraseOpen = true } else Modifier),
+                        )
+                    }
                     when {
+                        voiceLine && (phraseCut || phraseOpen) -> Text(
+                            if (phraseOpen) "点口令收起" else "口令太长没显示全，点一下看完整口令",
+                            style = type.caption,
+                            color = RpColors.Gold.copy(alpha = 0.9f),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp).clickable { phraseOpen = !phraseOpen },
+                        )
                         // 语音红包：口令是大字，祝福语退到下面一行（「按住说出口令领取」在「開」下面，这里不重复）
                         voiceLine -> Text(
                             packet?.greeting ?: meta.greeting,
@@ -1280,9 +1310,7 @@ private fun rememberVoiceHold(session: VoiceSession, enabled: Boolean): Modifier
     val view = LocalView.current
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
-    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) toast(context, "没有麦克风权限，领不了语音红包")
-    }
+    val askMic = rememberMicPermission("没有麦克风权限，领不了语音红包")
     val canStart by rememberUpdatedState(enabled)
     val upCancel = with(density) { 72.dp.toPx() }
     return Modifier.pointerInput(session) {
@@ -1290,7 +1318,7 @@ private fun rememberVoiceHold(session: VoiceSession, enabled: Boolean): Modifier
             val down = awaitFirstDown()
             if (!canStart) return@awaitEachGesture
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                askMic.launch(Manifest.permission.RECORD_AUDIO)
+                askMic()
                 return@awaitEachGesture
             }
             if (!session.start()) {
@@ -1432,7 +1460,7 @@ private fun OpenCoin(
 }
 
 /**
- * 放不下就缩字号的文字：从 [maxSize] 起，每次排版溢出（超出行数或高度）就小 1sp，最小到 [minSize]（还放不下才省略）。
+ * 放不下就缩字号的文字：从 [maxSize] 起，每次排版溢出（超出行数或高度）就小 1sp，最小到 [minSize]（还放不下才省略，通过 [onSettled] 告诉调用方）。
  * 字号定下来之前不画，免得看到一帧大字。
  */
 @Composable
@@ -1444,6 +1472,8 @@ private fun FitText(
     fontWeight: FontWeight,
     color: Color,
     modifier: Modifier = Modifier,
+    /** 字号定下来时回调一次：参数是缩到最小还放不下、被省略了没有 */
+    onSettled: (Boolean) -> Unit = {},
 ) {
     var size by remember(text) { mutableStateOf(maxSize) }
     var settled by remember(text) { mutableStateOf(false) }
@@ -1457,7 +1487,12 @@ private fun FitText(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         onTextLayout = { result ->
-            if (result.hasVisualOverflow && size.value > minSize.value) size = (size.value - 1f).sp else settled = true
+            if (result.hasVisualOverflow && size.value > minSize.value) {
+                size = (size.value - 1f).sp
+            } else {
+                settled = true
+                onSettled(result.hasVisualOverflow)
+            }
         },
         modifier = modifier.drawWithContent { if (settled) drawContent() },
     )

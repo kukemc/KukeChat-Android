@@ -70,9 +70,9 @@ private class GlyphBuilder {
 
     fun circle(cx: Float, cy: Float, r: Float, color: Color? = null, alpha: Float = 1f) = ellipse(cx, cy, r, r, 0f, color, alpha)
 
-    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float, color: Color? = null, alpha: Float = 1f) {
+    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float, color: Color? = null, alpha: Float = 1f, matrix: android.graphics.Matrix? = null) {
         val p = android.graphics.Path().apply { addRoundRect(android.graphics.RectF(x, y, x + w, y + h), r, r, android.graphics.Path.Direction.CW) }
-        put(p.asComposePath(), color, alpha, null)
+        put(p.asComposePath(), color, alpha, null, matrix)
     }
 
     fun group(matrix: android.graphics.Matrix, block: GlyphBuilder.() -> Unit) {
@@ -147,7 +147,12 @@ private fun noisePaths(): List<String> {
     return paths.map { it.toString() }
 }
 
-val PatternKeys = setOf("dots", "grid", "stripes", "waves", "stars", "hearts", "pixels", "clouds", "petals", "noise")
+/** 电路的走线和焊点（40×40 一块）。从左边 y=10、y=30 进来的线，右边同一高度有出去的那一截；上下的 x=8、x=30 也一样 */
+private const val CIRCUIT_TRACES = "M0 10h12l6 6v8h10M30 0v4l6 6h4M40 30H30l-4-4v-6M0 30h5M8 40v-6l5-5M8 0v3M30 40v-3"
+private val CIRCUIT_PADS = listOf(28f to 24f, 26f to 20f, 13f to 29f, 5f to 30f, 8f to 3f, 30f to 37f)
+
+// 后五个是 2.0.10 加的
+val PatternKeys = setOf("dots", "grid", "stripes", "waves", "stars", "hearts", "pixels", "clouds", "petals", "noise", "scanlines", "circuit", "fizz", "ruled", "confetti")
 
 private val tiles = HashMap<String, PatternTile>()
 
@@ -181,25 +186,54 @@ internal fun patternTile(key: String): PatternTile? = tiles.getOrPut(key) {
         "noise" -> PatternTile(NOISE_SIZE.toFloat(), NOISE_SIZE.toFloat(), glyph {
             noisePaths().forEachIndexed { level, d -> if (d.isNotEmpty()) fill(d, alpha = NOISE_LEVELS[level]) }
         })
+        // 扫描线：老显示器那样，每三像素一道细横线
+        "scanlines" -> PatternTile(6f, 3f, glyph { fill("M0 0h6v1h-6z") })
+        // 电路：几条走线拐着弯，末端一个焊点
+        "circuit" -> PatternTile(40f, 40f, glyph {
+            stroke(CIRCUIT_TRACES, 1.2f, join = StrokeJoin.Round)
+            CIRCUIT_PADS.forEach { (x, y) -> circle(x, y, 1.8f) }
+        })
+        // 汽水泡：大小不一的空心小圈，夹着两粒实心的
+        "fizz" -> PatternTile(30f, 44f, glyph {
+            ellipseStroke(7f, 35f, 3.2f, 3.2f, 1.1f); ellipseStroke(21f, 22f, 2.3f, 2.3f, 1.1f); ellipseStroke(9f, 11f, 1.6f, 1.6f, 1.1f); ellipseStroke(24f, 5f, 1.1f, 1.1f, 1.1f)
+            circle(16f, 40f, 1f); circle(3f, 22f, 0.8f)
+        })
+        // 信纸横线：每 22 像素一道
+        "ruled" -> PatternTile(10f, 22f, glyph { fill("M0 20.5h10v1h-10z") })
+        // 彩纸屑：几条歪着的小纸条和圆点，深浅不一
+        "confetti" -> PatternTile(44f, 44f, glyph {
+            roundRect(5f, 6f, 6f, 2.4f, 1f, matrix = rotation(28f, 8f, 7.2f))
+            roundRect(28f, 9f, 5f, 2.2f, 1f, alpha = 0.7f, matrix = rotation(-35f, 30.5f, 10.1f))
+            circle(20f, 22f, 1.6f, alpha = 0.85f)
+            roundRect(33f, 30f, 6f, 2.4f, 1f, matrix = rotation(62f, 36f, 31.2f))
+            roundRect(8f, 33f, 5f, 2.2f, 1f, alpha = 0.6f, matrix = rotation(-12f, 10.5f, 34.1f))
+            circle(40f, 18f, 1f, alpha = 0.7f)
+            circle(24f, 40f, 1.2f, alpha = 0.5f)
+        })
         else -> return null
     }
 }
 
 // ------------------------------------------------------------------ 角饰（ornaments.tsx），24×24 画板
 
-val BubbleOrnamentKeys = setOf("sparkle", "star", "moon", "sun", "heart", "petal", "cloud", "paw", "leaf", "crown", "pixel_heart", "bolt", "snow")
-val FrameOnlyOrnamentKeys = setOf("cat_ears", "halo", "horns", "laurel", "wings", "bow")
+// cursor 往后六个、headphones / flame 是 2.0.10 加的
+val BubbleOrnamentKeys = setOf("sparkle", "star", "moon", "sun", "heart", "petal", "cloud", "paw", "leaf", "crown", "pixel_heart", "bolt", "snow", "cursor", "stamp", "cherry", "note", "koi", "planet")
+val FrameOnlyOrnamentKeys = setOf("cat_ears", "halo", "horns", "laurel", "wings", "bow", "headphones", "flame")
 
-/** animated 时怎么动：闪、晃、浮、跳（气泡和头像框共用），耳朵抖、翅膀扇（头像框专用） */
-enum class OrnamentMotion { Twinkle, Sway, Float, Pulse, Twitch, Flap }
+/** animated 时怎么动：闪、晃、浮、跳、亮灭（气泡和头像框共用），耳朵抖、翅膀扇、火苗窜（头像框专用） */
+enum class OrnamentMotion { Twinkle, Sway, Float, Pulse, Blink, Twitch, Flap, Burn }
 
 fun ornamentMotion(key: String): OrnamentMotion = when (key) {
     "sparkle", "star", "sun", "snow", "bolt" -> OrnamentMotion.Twinkle
     "moon", "cloud" -> OrnamentMotion.Float
     "petal", "leaf", "paw", "crown" -> OrnamentMotion.Sway
     "heart", "pixel_heart" -> OrnamentMotion.Pulse
+    "cursor" -> OrnamentMotion.Blink
+    "stamp", "cherry", "koi" -> OrnamentMotion.Sway
+    "note", "planet" -> OrnamentMotion.Float
     "cat_ears" -> OrnamentMotion.Twitch
-    "halo", "laurel" -> OrnamentMotion.Float
+    "halo", "laurel", "headphones" -> OrnamentMotion.Float
+    "flame" -> OrnamentMotion.Burn
     "horns" -> OrnamentMotion.Pulse
     "wings" -> OrnamentMotion.Flap
     "bow" -> OrnamentMotion.Sway
@@ -228,6 +262,12 @@ private fun leaf(x: Float, y: Float, length: Float, width: Float, degrees: Float
     val midX = x + length * 0.46f * c
     val midY = y + length * 0.46f * s
     return "M${n(x)} ${n(y)}Q${n(midX - width * s)} ${n(midY + width * c)} ${n(tipX)} ${n(tipY)}Q${n(midX + width * s)} ${n(midY - width * c)} ${n(x)} ${n(y)}Z"
+}
+
+/** 邮票四边的齿孔：每边五个小圆 */
+private val STAMP_HOLES: String = listOf(4.8f, 8.4f, 12f, 15.6f, 19.2f).joinToString("") { at ->
+    val dot = "a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0 -2.2 0"
+    "M${n(at - 1.1f)} 3${dot}M${n(at - 1.1f)} 21${dot}M1.9 ${n(at)}${dot}M19.9 ${n(at)}$dot"
 }
 
 private const val LAUREL_STEM = "M2.4 11.2Q12 14.6 21.6 9.4"
@@ -308,6 +348,62 @@ private fun buildOrnament(key: String): Glyph? = when (key) {
     "snow" -> glyph {
         for (angle in 0 until 360 step 60) stroke(SNOW_ARM, 1.7f, join = StrokeJoin.Round, matrix = rotation(angle.toFloat(), 12f, 12f))
     }
+    // 光标：命令行的提示符「>」加一个方块光标
+    "cursor" -> glyph {
+        stroke("M2.6 6.6L8.2 12L2.6 17.4", 2.6f, join = StrokeJoin.Round)
+        roundRect(11.4f, 4.6f, 9.6f, 14.8f, 1f)
+        roundRect(12.8f, 6f, 2.4f, 5.6f, 0.6f, White, 0.5f)
+    }
+    // 邮票：齿孔边的方块，中间一块白底上是山和太阳
+    "stamp" -> glyph {
+        group(rotation(8f, 12f, 12f)) {
+            roundRect(3f, 3f, 18f, 18f, 0.8f)
+            fill(STAMP_HOLES, White, 0.92f)
+            roundRect(6f, 6f, 12f, 12f, 0.6f, White, 0.9f)
+            fill("M7.4 16.6L10.6 11.8L12.6 14.4L14.2 12.4L16.6 16.6Z")
+            circle(14.6f, 9.2f, 1.5f)
+        }
+    }
+    // 樱桃：两颗挂在一根分叉的梗上，梗顶一片叶子
+    "cherry" -> glyph {
+        stroke("M7.6 13.6C8.6 9 11.6 5.4 16 3.2M16.4 13.6C16.2 9.6 16.2 6.2 16 3.2", 1.5f, Color(0xFF6B4A2B))
+        fill("M16 3.2C18 1.6 20.8 1.8 22 3.4C20.4 5 18 5.2 16 3.2Z", Color(0xFF4CAF50))
+        circle(7.4f, 16.8f, 4.6f)
+        circle(16.6f, 17.6f, 4.2f)
+        shade("M16.6 21.8A4.2 4.2 0 0 0 20.6 16.4A4.6 4.6 0 0 1 16.6 21.8Z")
+        circle(5.6f, 15f, 1.3f, White, 0.5f)
+        circle(15f, 16f, 1.1f, White, 0.5f)
+    }
+    // 音符：两个连起来的八分音符
+    "note" -> glyph {
+        stroke("M8.6 17.4V6L19.8 3.4V14.8", 2f, join = StrokeJoin.Round)
+        fill("M8.6 6L19.8 3.4V6.8L8.6 9.4Z")
+        ellipse(6f, 17.8f, 3.4f, 2.6f, -20f)
+        ellipse(17.2f, 15.2f, 3.4f, 2.6f, -20f)
+        ellipse(5f, 17f, 1.2f, 0.7f, -20f, White, 0.5f)
+        ellipse(16.2f, 14.4f, 1.2f, 0.7f, -20f, White, 0.5f)
+    }
+    // 锦鲤：头朝左，身上几块白斑，尾巴分叉
+    "koi" -> glyph {
+        fill("M18.4 12.4L23 8C22.5 10.6 22.5 14.2 23.2 17Z")
+        fill("M2.6 12.6C5.6 7.4 12 5.8 16.6 9C18 10 18.8 11.2 19 12.4C18.8 13.6 18 14.8 16.6 15.8C12 19 5.6 17.8 2.6 12.6Z")
+        fill("M10.6 16.6L9 20.4L12.8 17.8Z")
+        shade("M10.6 16.6L9 20.4L12.8 17.8Z")
+        fill("M8.4 9.6C10.2 8.4 12.6 8.4 14.2 9.8C12.8 11.4 10.2 11.6 8.4 9.6ZM12.8 14.6C14 13.4 15.8 13.2 17 14.2C15.8 15.4 14 15.6 12.8 14.6Z", White, 0.88f)
+        circle(5.6f, 11.6f, 0.95f, Color(0xFF1A1A1A))
+        stroke("M4.6 14.6C6.6 16.6 10 17.2 13 16.2", 1f, Black, 0.16f)
+    }
+    // 行星：一个球套着一圈斜着的环，环在球后面的那半截先画；前面那半截先垫一道白边，和球分开
+    "planet" -> glyph {
+        group(rotation(-20f, 12f, 12f)) {
+            stroke("M1.6 12A10.4 3.4 0 0 1 22.4 12", 1.7f)
+            circle(12f, 12f, 6.4f)
+            shade("M12 18.4A6.4 6.4 0 0 0 18.4 12A5.4 5.4 0 0 1 12 18.4Z")
+            stroke("M8.2 9.4A4.6 4.6 0 0 1 11.6 7.2", 1.3f, White, 0.6f)
+            stroke("M1.6 12A10.4 3.4 0 0 0 22.4 12", 3.4f, White, 0.9f)
+            stroke("M1.6 12A10.4 3.4 0 0 0 22.4 12", 1.7f)
+        }
+    }
     // ---- 头像框专用（frameOrnaments.tsx）。成对的只画右边那一片，左边那片由调用方镜像
     "cat_ears" -> glyph {
         solid("M3 22.4C3.2 14.2 7.2 6.6 14.4 2.5C15.5 1.9 16.8 2.6 17 3.9C17.9 10.3 19.6 16.4 21.6 22.4Z", 1.3f)
@@ -353,6 +449,22 @@ private fun buildOrnament(key: String): Glyph? = when (key) {
         roundRect(9.7f, 9.1f, 4.6f, 5.4f, 1.9f)
         roundRect(9.7f, 9.1f, 4.6f, 5.4f, 1.9f, Black, 0.16f)
         stroke("M10.9 10.4C11.3 9.9 12 9.8 12.6 10", 0.9f, White, 0.6f)
+    }
+    // 耳机：一道头梁，两只耳罩，耳罩上一圈软垫
+    "headphones" -> glyph {
+        stroke("M3.4 16.4C3.4 9.4 7.2 4.8 12 4.8C16.8 4.8 20.6 9.4 20.6 16.4", 2.4f)
+        stroke("M5.4 10.6C6.6 8 9 6.4 12 6.4", 1f, White, 0.55f)
+        roundRect(0.8f, 13.2f, 5.6f, 9f, 2.6f)
+        roundRect(17.6f, 13.2f, 5.6f, 9f, 2.6f)
+        roundRect(4.4f, 14.6f, 2.4f, 6.2f, 1.2f, Black, 0.16f)
+        roundRect(17.2f, 14.6f, 2.4f, 6.2f, 1.2f, Black, 0.16f)
+        stroke("M2.2 15.6V19.4M19 15.6V19.4", 1.1f, White, 0.55f)
+    }
+    // 火苗：三簇连在一起的火，中间高、两边矮；外焰用主体色，里面一团亮黄的内焰
+    "flame" -> glyph {
+        fill("M12 23.2C6.6 23.2 1.6 21 1 17C0.6 14.2 2 11.8 3.2 9.8C4.2 11.4 4.6 12.8 4.4 14C5.6 12.6 6.4 10.6 6.4 8.2C8.2 9.4 9 11 9.2 12.4C10.4 10 11.4 6.4 11.6 1.6C15.2 4.4 16.4 8.6 15.6 12.4C16.4 11.2 17.6 10.2 18 8.2C19.4 10 19.6 12.2 19.6 14C20.4 12.8 20.6 11.2 20.8 9.8C22.4 11.8 23.4 14.4 23 17C22.4 21 17.4 23.2 12 23.2Z")
+        fill("M12 21.8C8.6 21.8 6.4 20.4 6.6 18.2C6.8 16.4 8.4 15.2 9.2 13.6C10.2 14.6 10.6 15.6 10.6 16.6C11.6 15.4 12.4 13.6 12.4 11.4C14.8 13 16.8 15.4 17 17.8C17.2 20.2 15.2 21.8 12 21.8Z", Color(0xFFFFE08A), 0.95f)
+        stroke("M3 15.6C3.2 14 3.8 12.8 4.6 11.8M9.6 9.6C10.4 8 10.8 6.4 11 4.8", 1.1f, White, 0.5f)
     }
     else -> null
 }

@@ -473,6 +473,8 @@ private fun MessageBodyContent(
     val radius = (if (skinPaint != null) skin?.radius ?: baseRadius else baseRadius).dp
     val bubbleShape = if (mine) RoundedCornerShape(radius, 4.dp, radius, radius) else RoundedCornerShape(4.dp, radius, radius, radius)
     val content = skinPaint?.text ?: if (mine) colors.onBubbleOut else colors.text
+    // 皮肤的专属字体（docs/shop.md 2.6）只给正文用；没下载完之前是原来的字体
+    val skinFont = if (skinPaint != null && message.content.isNotBlank()) ink.kuke.chat.feature.shop.rememberSkinFontFamily(skin?.font) else null
     val haptics = LocalHapticFeedback.current
 
     // 不套气泡的：贴图、单张图片
@@ -604,7 +606,7 @@ private fun MessageBodyContent(
             else -> {
                 if (message.content.isNotBlank()) {
                     val rich = if (skinPaint != null) remember(message.content, skinPaint) { richText(message, true, skinPaint.link, skinPaint.link) } else richText(message, mine, colors.accent, colors.onBubbleOut)
-                    Text(rich, style = type.body, color = content)
+                    Text(rich, style = type.body, color = content, fontFamily = skinFont)
                 }
                 val images = Meta.images(message)
                 if (images.isNotEmpty()) {

@@ -55,10 +55,11 @@ import kotlin.math.sin
  *
  * 已支持（和电脑版同一套图形和参数）：
  *   气泡 —— 纯色 / 线性与径向渐变、文字与链接色、边框、圆角、阴影（最多两层，偏移 模糊 [扩散] 颜色）、
- *           纹样 pattern（十种，裁在气泡形状内）、角饰 ornaments（十三种，骑在四个角上）、
- *           动效 flow / shimmer / breathe、角饰的闪 / 晃 / 浮 / 跳，深色覆盖（含 shadow、pattern）；
- *   头像框 —— 纯色 / 线性 / 径向 / conic 渐变的环、留白、外发光、装饰（十九种，八个方位，成对的猫耳 / 角 / 翅膀 / 月桂拆成左右两片），
- *           动效 spin / pulse / shimmer、装饰的闪 / 晃 / 浮 / 跳 / 抖耳 / 扇翅，深色覆盖；尺寸都按 40dp 头像等比缩放。
+ *           纹样 pattern（十五种，裁在气泡形状内）、角饰 ornaments（十九种，骑在四个角上）、
+ *           动效 flow / shimmer / breathe / scan、角饰的闪 / 晃 / 浮 / 跳 / 亮灭，深色覆盖（含 shadow、pattern），
+ *           专属字体（不在 style 里，在它旁边，见 SkinFonts.kt）；
+ *   头像框 —— 纯色 / 线性 / 径向 / conic 渐变的环、留白、外发光、装饰（二十七种，八个方位，成对的猫耳 / 角 / 翅膀 / 月桂拆成左右两片），
+ *           动效 spin / pulse / shimmer / flicker、装饰的闪 / 晃 / 浮 / 跳 / 亮灭 / 抖耳 / 扇翅 / 火苗窜，深色覆盖；尺寸都按 40dp 头像等比缩放。
  *   系统关了动画（rememberReducedMotion）时 animation 当作 none、animated 当作 false，纹样和角饰本身照常画。
  * 降级：
  *   · 阴影、光晕的高斯模糊在 Android 8.x（API 26–27）的硬件画布上画不出来，退成不模糊的淡色；
@@ -264,7 +265,8 @@ class SkinPaint(
     val glow: Color = shadows.firstOrNull()?.color?.copy(alpha = 1f) ?: fill.middle,
 )
 
-enum class BubbleAnimation { None, Flow, Shimmer, Breathe }
+/** Scan（一道扫描线从上往下扫）是 2.0.10 加的 */
+enum class BubbleAnimation { None, Flow, Shimmer, Breathe, Scan }
 
 /** 角饰：corner ∈ tl / tr / bl / br，size 10–28（dp） */
 class BubbleOrnament(val key: String, val corner: String, val color: Color, val size: Int, val animated: Boolean)
@@ -275,8 +277,13 @@ class BubbleSkin(
     val radius: Int?,
     val animation: BubbleAnimation = BubbleAnimation.None,
     val ornaments: List<BubbleOrnament> = emptyList(),
+    /** 专属字体；只有 [withFont] 并过的才有 */
+    val font: SkinFont? = null,
 ) {
     fun paint(isDark: Boolean) = if (isDark) dark else light
+
+    /** 并上专属字体（服务端放在 style 旁边的 font，见 docs/shop.md 2.6）；没有字体就是自己 */
+    fun withFont(font: SkinFont?): BubbleSkin = if (font == null) this else BubbleSkin(light, dark, radius, animation, ornaments, font)
 
     /**
      * 角饰探出气泡上、下沿的部分超过原有空隙（3dp）时，给气泡垫出来的外边距（dp）。
@@ -421,6 +428,7 @@ fun parseBubbleSkin(style: JsonElement?): BubbleSkin? {
         "flow" -> BubbleAnimation.Flow
         "shimmer" -> BubbleAnimation.Shimmer
         "breathe" -> BubbleAnimation.Breathe
+        "scan" -> BubbleAnimation.Scan
         else -> BubbleAnimation.None
     }
     return BubbleSkin(light, dark, radius, animation, ornaments.valueOrNull().orEmpty())
@@ -434,18 +442,20 @@ fun SkinBubble(skin: BubbleSkin?, text: String, modifier: Modifier = Modifier, f
     val shape = RoundedCornerShape(radius, 4.dp, radius, radius)
     val paint = skin?.paint(colors.isDark)
     val m = if (skin != null && paint != null) modifier.bubbleSkin(skin, paint, shape, seed) else modifier.clip(shape).background(colors.bubbleOut)
+    val family = rememberSkinFontFamily(skin?.font)
     Box(m.padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Text(text, color = paint?.text ?: colors.onFill, fontSize = 14.sp)
+        Text(text, color = paint?.text ?: colors.onFill, fontSize = 14.sp, fontFamily = family)
     }
 }
 
 /**
  * 试穿舞台：上面一条对方的、下面一条自己的（自己的用这件皮肤）。画不出这件皮肤时自己的那条用主题默认气泡。
+ * [font] 是商品的专属字体（服务端给的 font 对象），不传就不用字体。
  */
 @Composable
-fun BubbleStage(style: JsonElement?, previewText: String, modifier: Modifier = Modifier) {
+fun BubbleStage(style: JsonElement?, previewText: String, modifier: Modifier = Modifier, font: JsonElement? = null) {
     val colors = KcTheme.colors
-    val skin = remember(style) { parseBubbleSkin(style) }
+    val skin = remember(style, font) { parseBubbleSkin(style)?.withFont(readSkinFont(font)) }
     val text = previewText.ifBlank { DefaultPreviewText }
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.chat).padding(horizontal = 14.dp, vertical = 10.dp),
@@ -469,7 +479,8 @@ const val DefaultPreviewText = "今天也要开心呀"
 /** 一种配色下的环：底色，外发光（颜色 + 模糊，按 40dp 头像计） */
 class FramePaint(val fill: SkinFill, val glow: Pair<Color, Float>?)
 
-enum class FrameAnimation { None, Spin, Pulse, Shimmer }
+/** Flicker（霓虹灯那样不规则地闪）是 2.0.10 加的 */
+enum class FrameAnimation { None, Spin, Pulse, Shimmer, Flicker }
 
 /**
  * 算好位置的一片装饰（成对的装饰在这里已经拆成左右两片）。
@@ -536,9 +547,9 @@ private fun readFrameOrnaments(element: JsonElement?): Read<List<FrameOrnamentEn
 /**
  * 每种装饰怎么贴到环上（同电脑版 frameOrnaments.tsx 的 LAYOUT）：
  *   pair 成对，spread 是每片偏离方位的角度；back 垫在头像后面；turn out 朝外 / hug 贴着环；lift 中心比环外沿再往外多少（乘 size）；
- *   half 图形在画板里实际占的半宽、半高（占 size 的比例）。
+ *   half 图形在画板里实际占的半宽、半高（占 size 的比例）；scale 画出来比 size 大多少倍（size 上限 28，耳机要跨过整个头顶），探出多远按放大后的算。
  */
-private class FrameLayout(val pair: Float? = null, val back: Boolean = false, val turn: String? = null, val lift: Float? = null, val halfX: Float = 0.46f, val halfY: Float = 0.46f)
+private class FrameLayout(val pair: Float? = null, val back: Boolean = false, val turn: String? = null, val lift: Float? = null, val halfX: Float = 0.46f, val halfY: Float = 0.46f, val scale: Float = 1f)
 
 private val FRAME_LAYOUT = mapOf(
     "crown" to FrameLayout(turn = "out", lift = 0.2f, halfX = 0.44f, halfY = 0.36f),
@@ -548,6 +559,9 @@ private val FRAME_LAYOUT = mapOf(
     "laurel" to FrameLayout(pair = 27f, turn = "hug", lift = -0.04f, halfX = 0.44f, halfY = 0.3f),
     "halo" to FrameLayout(turn = "out", lift = 0.24f, halfX = 0.46f, halfY = 0.2f),
     "bow" to FrameLayout(turn = "hug", lift = 0.02f, halfX = 0.46f, halfY = 0.34f),
+    // 耳机压在头顶往下一点，两只耳罩落在头像两侧偏上；火苗压在环的顶上往上窜
+    "headphones" to FrameLayout(turn = "out", lift = -0.38f, halfX = 0.5f, halfY = 0.42f, scale = 1.55f),
+    "flame" to FrameLayout(turn = "out", lift = 0.42f, halfX = 0.48f, halfY = 0.46f),
 )
 private val DEFAULT_FRAME_LAYOUT = FrameLayout()
 
@@ -563,13 +577,15 @@ private fun placePiece(entry: FrameOrnamentEntry, angle: Float, turn: Float, mir
     val s = sin(theta).toFloat()
     val c = cos(theta).toFloat()
     val phi = Math.toRadians(turn.toDouble())
-    val extentX = entry.size * (layout.halfX * abs(cos(phi)) + layout.halfY * abs(sin(phi))).toFloat()
-    val extentY = entry.size * (layout.halfX * abs(sin(phi)) + layout.halfY * abs(cos(phi))).toFloat()
+    // 放大画的装饰：位置照原来的 size 算（natural 里的 lift），大小和探出多远按放大后的
+    val size = entry.size * layout.scale
+    val extentX = size * (layout.halfX * abs(cos(phi)) + layout.halfY * abs(sin(phi))).toFloat()
+    val extentY = size * (layout.halfX * abs(sin(phi)) + layout.halfY * abs(cos(phi))).toFloat()
     var radius = natural
     if (abs(s) > 0.05f) radius = min(radius, (FRAME_RADIUS + MAX_OVERHANG - extentX) / abs(s))
     if (abs(c) > 0.05f) radius = min(radius, (FRAME_RADIUS + MAX_OVERHANG - extentY) / abs(c))
     radius = max(0f, radius)
-    return FramePiece(entry.key, entry.color, entry.animated, layout.back, 0.5f + radius * s / 40f, 0.5f - radius * c / 40f, entry.size.toFloat(), turn, mirror)
+    return FramePiece(entry.key, entry.color, entry.animated, layout.back, 0.5f + radius * s / 40f, 0.5f - radius * c / 40f, size, turn, mirror)
 }
 
 /** 翅膀在环上的方位：position 只决定它长得高一点还是低一点，左右总是成对的 */
@@ -641,6 +657,7 @@ fun parseAvatarFrame(style: JsonElement?): AvatarFrame? {
         "spin" -> FrameAnimation.Spin
         "pulse" -> FrameAnimation.Pulse
         "shimmer" -> FrameAnimation.Shimmer
+        "flicker" -> FrameAnimation.Flicker
         else -> FrameAnimation.None
     }
     val pulse = animation == FrameAnimation.Pulse
