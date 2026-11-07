@@ -20,6 +20,8 @@ class KukeApp : Application(), ImageLoaderFactory {
         Notifier.ensureChannels(this)
         // 语音播放器（ExoPlayer）要 Context
         ink.kuke.chat.feature.chat.VoicePlayer.bind(this)
+        // 聊天里的积木消息：隐藏 WebView 第一次用到时才建，这里只记 Context、挂上内存紧张时的释放
+        ink.kuke.chat.core.dsl.DslRenderer.init(this)
         // 最近会话发布成直接分享快捷方式（会话列表变了就更新）
         ink.kuke.chat.feature.share.ShareShortcuts.bind(this, graph)
         // 自动检查更新：发版推送、回前台超过 1 小时再查（启动那次由 UpdateHost 发起）

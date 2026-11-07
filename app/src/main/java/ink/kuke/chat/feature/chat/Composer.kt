@@ -125,7 +125,7 @@ fun Composer(
     onSent: () -> Unit,
     isGroup: Boolean = false,
     canMentionAll: Boolean = false,
-    /** 工具面板里的工具（image / camera / file / poll / redPacket / gift / poke）交给聊天页去开面板 */
+    /** 工具面板里的工具（image / camera / file / poll / redPacket / gift / dsl / poke）交给聊天页去开面板 */
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
@@ -616,7 +616,7 @@ private fun EmojiTab(icon: ImageVector, label: String, on: Boolean, click: () ->
     ) { KcIcon(icon, tint = if (on) colors.accent else colors.muted, size = 18.dp, contentDescription = label) }
 }
 
-/** 工具面板（设计稿 P06）：图片、拍照、文件、@ 群成员、发起投票、红包、礼物、机器人指令、戳一戳。群聊专属的私聊里不出现 */
+/** 工具面板（设计稿 P06）：图片、拍照、文件、@ 群成员、发起投票、红包、礼物、积木、机器人指令、戳一戳。群聊专属的私聊里不出现 */
 @Composable
 private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: (String) -> Unit) {
     val colors = KcTheme.colors
@@ -626,6 +626,7 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: 
         Tool("camera", "拍照", KcIcons.camera, Color(0xFF0E9AB8)),
         // 临时文件：任意类型，24 小时后过期（docs/self-chat.md 第 5 节）
         Tool("file", "文件", KcIcons.paperclip, Color(0xFF12A679)),
+        Tool("dsl", "积木", KcIcons.blocks, Color(0xFF855CD6)),
     ) else buildList {
         add(Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)))
         // 拍照：调系统相机拍一张，拍完进发图确认面板（同相册选的图）
@@ -636,6 +637,8 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: 
         add(Tool("poll", "发起投票", KcIcons.poll, Color(0xFFF0700A)))
         add(Tool("redPacket", "红包", KcIcons.redPacket, Color(0xFFE5484D)))
         add(Tool("gift", "礼物", KcIcons.gift, Color(0xFFE64F8A)))
+        // 积木：写 Gandi 积木文本、实时预览，发成 ```gandi-dsl 围栏（DslBlocks.kt）
+        add(Tool("dsl", "积木", KcIcons.blocks, Color(0xFF855CD6)))
         if (isGroup) add(Tool("command", "机器人指令", KcIcons.bot, Color(0xFF7A55D6)))
         if (isGroup) add(Tool("poke", "戳一戳", KcIcons.poke, Color(0xFFE39B00)))
     }

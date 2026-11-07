@@ -1,5 +1,6 @@
 package ink.kuke.chat.core.ui
 
+import ink.kuke.chat.core.dsl.DslText
 import ink.kuke.chat.core.model.Message
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -33,6 +34,8 @@ fun messagePreview(message: Message): String {
         else -> when {
             meta?.get("share_card") is JsonObject -> "[名片] " + message.content.take(40)
             message.content.isBlank() && meta?.get("images") != null -> "[图片]"
+            // 积木围栏换成「[积木]」（同电脑版 dslPreviewText），围栏外的文字照留
+            DslText.split(message.content) != null -> DslText.preview(message.content).take(120)
             else -> stripMarkdown(message.content).take(120)
         }
     }

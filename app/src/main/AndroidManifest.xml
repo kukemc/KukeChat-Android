@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 保存积木图片到相册：Android 10+ 走 MediaStore 不要权限，9 及以下才要 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- 按住说话 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 应用内更新：下载完交给系统安装器 -->

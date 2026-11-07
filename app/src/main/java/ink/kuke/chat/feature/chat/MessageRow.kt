@@ -72,6 +72,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -604,7 +605,14 @@ private fun MessageBodyContent(
         when (message.type) {
             "voice" -> VoiceContent(message, mine, inset = if (pill) 20.dp else 24.dp)
             else -> {
-                if (message.content.isNotBlank()) {
+                // 积木消息（```gandi-dsl 围栏，或整条就是积木文本）：围栏外的文字照常，积木画成卡片（DslBlocks.kt）
+                val dslSegments = if (message.content.isNotBlank()) rememberDslSegments(message) else null
+                if (dslSegments != null) {
+                    val rich: (String) -> AnnotatedString = remember(message, mine, skinPaint, colors) {
+                        { part -> if (skinPaint != null) richText(message.copy(content = part), true, skinPaint.link, skinPaint.link) else richText(message.copy(content = part), mine, colors.accent, colors.onBubbleOut) }
+                    }
+                    DslMessageParts(message, dslSegments, mine, content, rich, skinFont)
+                } else if (message.content.isNotBlank()) {
                     val rich = if (skinPaint != null) remember(message.content, skinPaint) { richText(message, true, skinPaint.link, skinPaint.link) } else richText(message, mine, colors.accent, colors.onBubbleOut)
                     Text(rich, style = type.body, color = content, fontFamily = skinFont)
                 }
