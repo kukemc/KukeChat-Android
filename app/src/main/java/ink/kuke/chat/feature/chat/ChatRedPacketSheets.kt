@@ -237,12 +237,15 @@ internal class RedPacketSource(
         })
     }
 
-    /** POST /red-packets/{id}/claim（语音红包带 [body]）。领到或确认领不了之后让会话列表重拉，「[有红包]」跟着摘掉 */
+    /**
+     * POST /red-packets/{id}/claim（语音红包带 [body]）。领到或确认领不了之后，会话正挂着「[有红包]」才让列表重拉
+     * （[ink.kuke.chat.core.data.ConversationRepository.redPacketSettled]；随后的结束事件也走它，挨着来的合成一次）
+     */
     suspend fun claim(id: Long, body: JsonObject? = null): ClaimOutcome = try {
         val result = graph.api.post("/red-packets/$id/claim", body).asObj()
         result?.o("red_packet")?.let(::parseRedPacket)?.let { cache[id] = it }
         result?.get("message")?.takeIf { it is JsonObject }?.let(onMessage)
-        graph.conversations.refreshSoon()
+        graph.conversations.redPacketSettled(cache[id]?.conversationId)
         onSettled(id)
         ClaimOutcome.Claimed(result?.i("amount") ?: 0)
     } catch (e: CancellationException) {
@@ -251,7 +254,7 @@ internal class RedPacketSource(
         when (e.code) {
             "finished", "expired", "revoked" -> {
                 load(id)
-                graph.conversations.refreshSoon()
+                graph.conversations.redPacketSettled(cache[id]?.conversationId)
                 onSettled(id)
                 ClaimOutcome.Ended(e.code)
             }

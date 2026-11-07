@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import ink.kuke.chat.core.data.slot
@@ -63,12 +64,45 @@ object MemberDirectory {
     /** 上次看到的成员（内存没有就同步读磁盘，文件很小）；没有返回 null */
     fun cached(graph: ink.kuke.chat.core.AppGraph, conversationId: Long): List<CachedMember>? = slot(graph, conversationId).get()
 
+    /** 每个群上次整份拉成员的时间（只在内存：新进程第一次进群照常拉） */
+    private val fetchedAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    /** 成员列表多久之内算新的：进群聊不再重拉（大群的成员列表不分页，一次几百人） */
+    private const val FRESH_MS = 5 * 60_000L
+
+    /** 会让角色 / 名字变化的事件：作废这个群的「刚拉过」，下次进群聊重拉 */
+    private val INVALIDATING = setOf(
+        "group.member.joined", "group.member.left", "group.member.removed", "group.member.invited",
+        "group.member.role_updated", "group.bot.installed", "group.bot.removed",
+    )
+    private var watching: ink.kuke.chat.core.AppGraph? = null
+
+    /** App 启动时调一次：盯着成员变动事件 */
+    fun watch(graph: ink.kuke.chat.core.AppGraph) {
+        if (watching === graph) return
+        watching = graph
+        graph.scope.launch {
+            graph.realtime.events.collect { event ->
+                if (event.type !in INVALIDATING) return@collect
+                event.data.l("conversation_id")?.let { fetchedAt.remove(it) }
+            }
+        }
+    }
+
     /** 拉一次完整成员列表并写回缓存 */
     suspend fun refresh(graph: ink.kuke.chat.core.AppGraph, conversationId: Long): List<CachedMember> {
         val list = parseMemberPage(graph.api.get("/conversations/$conversationId/members")).items
             .map { CachedMember(it.userId, it.role, it.name) }
         slot(graph, conversationId).put(list)
+        fetchedAt[conversationId] = System.currentTimeMillis()
         return list
+    }
+
+    /** 进群聊时用：[FRESH_MS] 内拉过、期间没有成员变动就直接用缓存（返回 null = 不用拉，界面留着缓存） */
+    suspend fun refreshIfStale(graph: ink.kuke.chat.core.AppGraph, conversationId: Long): List<CachedMember>? {
+        val at = fetchedAt[conversationId]
+        if (at != null && System.currentTimeMillis() - at < FRESH_MS && cached(graph, conversationId) != null) return null
+        return refresh(graph, conversationId)
     }
 }
 

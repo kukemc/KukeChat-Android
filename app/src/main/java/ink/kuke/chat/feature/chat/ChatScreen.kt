@@ -359,7 +359,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         remember(conversationId) { MemberDirectory.cached(graph, conversationId).orEmpty() }, conversationId, isGroup,
     ) {
         if (!isGroup) return@produceState
-        runCatching { MemberDirectory.refresh(graph, conversationId) }.onSuccess { value = it }
+        // 5 分钟内拉过、期间没有成员变动：直接用缓存，不再拉（返回 null）
+        runCatching { MemberDirectory.refreshIfStale(graph, conversationId) }.getOrNull()?.let { value = it }
     }
     val memberRoles = remember(members) { members.associate { it.id to it.role } }
     val memberNames = remember(members) { members.associate { it.id to it.name } }
@@ -942,7 +943,8 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
         var fileTick by remember(conversationId) { mutableStateOf(0) }
         LaunchedEffect(conversationId) {
             graph.realtime.events.collect { event ->
-                if (event.type == "group.file.updated") fileTick++
+                // 只认这个群的（以前别的群传文件也会让这里重拉一遍群文件）
+                if (event.type == "group.file.updated" && event.data.l("conversation_id") == conversationId) fileTick++
             }
         }
         LaunchedEffect(conversationId, hasFileMessages, fileTick) {

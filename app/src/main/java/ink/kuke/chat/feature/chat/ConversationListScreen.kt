@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.model.Conversation
 import ink.kuke.chat.core.net.userMessage
@@ -131,16 +132,23 @@ fun ConversationListScreen(graph: AppGraph, onOpen: (Long) -> Unit, drawer: Prof
         if (!loaded) graph.conversations.refresh().onFailure { error = it.userMessage() }
     }
 
-    // 在线人数：进页面取一次，之后一分钟一次；presence.updated 事件带 online_count 时直接用
-    LaunchedEffect(Unit) {
-        while (true) {
-            runCatching { graph.api.get("/users/online-count").asObj()?.i("online_count") }.onSuccess { if (it != null) onlineCount = it }
-            delay(60_000)
+    // 在线人数：页面在前台时一分钟一次（切到后台就停，回来超过一分钟再取）；presence.updated 事件带 online_count 时直接用，这一分钟不再取
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    var onlineCountAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                if (System.currentTimeMillis() - onlineCountAt >= ONLINE_COUNT_INTERVAL_MS) {
+                    runCatching { graph.api.get("/users/online-count").asObj()?.i("online_count") }
+                        .onSuccess { if (it != null) { onlineCount = it; onlineCountAt = System.currentTimeMillis() } }
+                }
+                delay(ONLINE_COUNT_INTERVAL_MS)
+            }
         }
     }
     LaunchedEffect(Unit) {
         graph.realtime.events.collect { event ->
-            if (event.type == "presence.updated") event.data.i("online_count")?.let { onlineCount = it }
+            if (event.type == "presence.updated") event.data.i("online_count")?.let { onlineCount = it; onlineCountAt = System.currentTimeMillis() }
         }
     }
 
@@ -688,3 +696,6 @@ private fun ConversationMenu(
         Box(Modifier.height(8.dp))
     }
 }
+
+/** 会话列表顶上的在线人数多久取一次 */
+private const val ONLINE_COUNT_INTERVAL_MS = 60_000L

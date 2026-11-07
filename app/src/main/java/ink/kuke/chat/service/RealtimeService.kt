@@ -66,7 +66,8 @@ class RealtimeService : Service() {
                 watchNetwork()
             }
             graph.realtime.start()
-            graph.conversations.refresh()
+            // 每次打开 App 都会走到这里：30 秒内拉过就不再拉（连接一直在，列表本来就是新的；断过线由重连补拉）
+            graph.conversations.refreshIfStale()
         }
         return START_STICKY
     }
@@ -78,10 +79,8 @@ class RealtimeService : Service() {
                 "message.created" -> {
                     val message = runCatching { KcJson.decodeFromJsonElement(Message.serializer(), event.data) }.getOrNull() ?: return@collect
                     val myId = graph.session.session.value?.user?.id ?: return@collect
-                    // 会话列表可能还没有它（新会话）：先拉一遍再判断
-                    val conversation = graph.conversations.find(message.conversationId)
-                        ?: graph.conversations.refresh().getOrNull()?.firstOrNull { it.id == message.conversationId }
-                        ?: return@collect
+                    // 会话列表可能还没有它（新会话）：等列表拉回来再判断。重拉由 ConversationRepository 收到同一条消息时排，这里不另拉
+                    val conversation = graph.conversations.awaitConversation(message.conversationId) ?: return@collect
                     val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
                     if (Notifier.shouldNotify(conversation, message, myId, graph.conversations.visibleConversationId, foreground)) {
                         val unread = graph.conversations.find(conversation.id)?.unreadCount ?: 1

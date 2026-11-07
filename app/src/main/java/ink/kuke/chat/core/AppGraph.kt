@@ -67,7 +67,13 @@ class AppGraph(context: Context) {
     /** 「我的设备」的本地未读（docs/self-chat.md 3.3） */
     val selfChat = ink.kuke.chat.core.data.SelfChatStore(appContext) { session.session.value?.user?.id }
 
-    val conversations = ConversationRepository(api, realtime, scope, screenCache, selfChat) { session.session.value?.user?.id }
+    val conversations = ConversationRepository(
+        api, realtime, scope, screenCache, selfChat,
+        // 后台时已读先攒着不报（回前台 KukeApp 里调 onForeground 补报）
+        isForeground = {
+            androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+        },
+    ) { session.session.value?.user?.id }
 
     fun signOut(reason: SignedOut? = null) {
         realtime.stop()

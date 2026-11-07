@@ -193,11 +193,17 @@ class ChatController(val graph: AppGraph, val conversationId: Long, private val 
                     "red_packet.updated" -> {
                         if (data["conversation_id"]?.jsonPrimitive?.longOrNull != conversationId) return@collect
                         val id = data["id"]?.jsonPrimitive?.longOrNull ?: return@collect
-                        refreshPendingRedPackets()
+                        val status = data["status"]?.jsonPrimitive?.contentOrNull
+                        // 「N 个红包未领」：还在抢（别人领了一份）不影响我能不能领，不用重拉（以前每领一份都拉一次 /red-packets/pending）；
+                        // 结束了（抢完 / 过期 / 撤回）直接本地摘掉；认不出状态的照旧以服务端为准
+                        when {
+                            status == null -> refreshPendingRedPackets()
+                            status != "active" -> pendingRedPackets.removeAll { it.id == id }
+                        }
                         val current = redPackets[id] ?: return@collect
                         redPackets[id] = current.copy(
                             claimedCount = data["claimed_count"]?.jsonPrimitive?.intOrNull ?: current.claimedCount,
-                            status = data["status"]?.jsonPrimitive?.contentOrNull ?: current.status,
+                            status = status ?: current.status,
                         )
                     }
                 }

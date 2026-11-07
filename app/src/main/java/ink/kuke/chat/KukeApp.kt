@@ -24,6 +24,12 @@ class KukeApp : Application(), ImageLoaderFactory {
         ink.kuke.chat.feature.share.ShareShortcuts.bind(this, graph)
         // 自动检查更新：发版推送、回前台超过 1 小时再查（启动那次由 UpdateHost 发起）
         ink.kuke.chat.feature.settings.UpdateCenter.watch(graph)
+        // 回到前台：补报在后台时攒下的已读
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) graph.conversations.onForeground()
+        })
+        // 群成员缓存：成员进出、角色变了就作废，下次进群聊重拉
+        ink.kuke.chat.feature.chat.MemberDirectory.watch(graph)
         // 上次进程里分享进来的附件副本：新进程里已经没有任何东西引用它们了（只留刚拷的，防同一进程里正在准备发送的）
         graph.scope.launch(kotlinx.coroutines.Dispatchers.IO) { ink.kuke.chat.feature.share.ShareCache.sweep(this@KukeApp, olderThanMs = 10 * 60 * 1000L) }
         // 聊天里拍的照片同理（发出去的留到这时才删，见 CameraShots）
