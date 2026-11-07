@@ -62,7 +62,8 @@ import java.net.URLEncoder
  * 另外认 `kukechat://invite/<token>` 这种应用内链接。token 长度和服务端路径校验一致（6–80）。
  */
 object InviteLinks {
-    private val tokenPattern = Regex("^[A-Za-z0-9_-]{6,80}$")
+    // 群邀请带签名后缀：<token>.<邀请人 id>.<签名>（服务端 services/invites.py）
+    private val tokenPattern = Regex("^[A-Za-z0-9_.-]{6,120}$")
 
     fun tokenOf(url: String?): String? {
         if (url.isNullOrBlank()) return null
