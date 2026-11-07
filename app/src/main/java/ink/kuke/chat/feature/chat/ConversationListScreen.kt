@@ -348,16 +348,7 @@ fun ConversationListScreen(graph: AppGraph, onOpen: (Long) -> Unit, drawer: Prof
                 },
                 onCopyInvite = {
                     menuFor = null
-                    scope.launch {
-                        runCatching { graph.api.post("/invites/group/${conversation.id}").asObj()?.s("url") }
-                            .onSuccess { url ->
-                                if (url.isNullOrBlank()) toast(context, "邀请链接生成失败") else {
-                                    copyText(context, url)
-                                    toast(context, "邀请链接已复制")
-                                }
-                            }
-                            .onFailure { toast(context, it.userMessage()) }
-                    }
+                    ink.kuke.chat.feature.group.copyInviteLink(graph, conversation.id, context)
                 },
                 onDelete = {
                     menuFor = null
@@ -684,7 +675,8 @@ private fun ConversationMenu(
     val colors = KcTheme.colors
     KcSheet(onDismiss = onDismiss, title = conversation.name(), maxHeight = 520.dp) {
         SheetRow(if (conversation.pinned) "取消置顶" else "置顶会话", onPin, icon = KcIcons.pin)
-        if (conversation.isGroup) SheetRow("复制邀请链接", onCopyInvite, icon = KcIcons.link)
+        // 仅邀请的群，普通成员生成不了邀请链接（服务端 403），不给这一项
+        if (conversation.canShareInvite) SheetRow("复制邀请链接", onCopyInvite, icon = KcIcons.link)
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
         SheetRow("接收并提醒", { onSetting("notify") }, icon = KcIcons.bell, selected = conversation.messageSetting == "notify")
         SheetRow("接收不提醒", { onSetting("silent") }, icon = KcIcons.bellOff, selected = conversation.messageSetting == "silent")

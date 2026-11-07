@@ -32,6 +32,8 @@ import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.feature.bots.rememberOpenBotForUser
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.feature.chat.KcConfirm
+import ink.kuke.chat.feature.chat.RejectJoinRequestDialog
+import ink.kuke.chat.feature.contacts.sortedJoinRequests
 import ink.kuke.chat.feature.chat.KcSheet
 import ink.kuke.chat.feature.chat.KcTextField
 import ink.kuke.chat.feature.chat.MemberLite
@@ -177,7 +179,7 @@ private fun RoleTag(text: String, color: androidx.compose.ui.graphics.Color) {
 }
 
 
-/** 入群申请：GET /conversations/join-requests/incoming 里属于这个群的待处理项；同意 / 拒绝 */
+/** 入群申请：GET /conversations/join-requests/incoming 里属于这个群的待处理项；同意 / 拒绝（拒绝可以填理由） */
 @Composable
 internal fun JoinRequestsSheet(graph: AppGraph, conversationId: Long, onDismiss: () -> Unit, onChanged: () -> Unit) {
     val colors = KcTheme.colors
@@ -188,6 +190,8 @@ internal fun JoinRequestsSheet(graph: AppGraph, conversationId: Long, onDismiss:
     var attempt by remember { mutableStateOf(0) }
     // 同意时群已满员（group_full）：服务端给的提示，弹框引导去升级
     var fullHint by remember { mutableStateOf<String?>(null) }
+    // 正在填拒绝理由的申请
+    var rejecting by remember { mutableStateOf<JsonObject?>(null) }
     val nav = ink.kuke.chat.ui.shell.LocalAppNav.current
 
     LaunchedEffect(attempt) {
@@ -196,13 +200,17 @@ internal fun JoinRequestsSheet(graph: AppGraph, conversationId: Long, onDismiss:
             val element = graph.api.get("/conversations/join-requests/incoming")
             (element.asArr() ?: element.asObj()?.a("items")).orEmpty().mapNotNull { it.asObj() }
                 .filter { it.l("conversation_id") == conversationId && (it.s("status") ?: "pending") == "pending" }
+                .sortedJoinRequests({ it.s("status") }, { it.s("created_at") })
         }.onSuccess { items = it }.onFailure { error = it.userMessage() }
     }
 
-    fun decide(request: JsonObject, accept: Boolean) {
+    fun decide(request: JsonObject, accept: Boolean, note: String? = null) {
         val id = request.l("id") ?: return
         scope.launch {
-            runCatching { graph.api.post("/conversations/join-requests/$id/${if (accept) "accept" else "reject"}", JsonObject(emptyMap())) }
+            runCatching {
+                val social = ink.kuke.chat.feature.contacts.SocialApi(graph.api)
+                if (accept) social.acceptJoinRequest(id) else social.rejectJoinRequest(id, note)
+            }
                 .onSuccess {
                     graph.conversations.refreshSoon(0)
                     onChanged()
@@ -237,13 +245,22 @@ internal fun JoinRequestsSheet(graph: AppGraph, conversationId: Long, onDismiss:
                                 val note = listOfNotNull(request.s("answer")?.takeIf { it.isNotBlank() }?.let { "回答：$it" }, request.s("message")?.takeIf { it.isNotBlank() }).joinToString(" · ")
                                 if (note.isNotBlank()) Text(note, style = KcTheme.type.caption, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
-                            Text("拒绝", style = KcTheme.type.secondary, color = colors.muted, modifier = Modifier.clickable { decide(request, false) }.padding(8.dp))
+                            Text("拒绝", style = KcTheme.type.secondary, color = colors.muted, modifier = Modifier.clickable { rejecting = request }.padding(8.dp))
                             Text("同意", style = KcTheme.type.secondary, color = colors.accent, modifier = Modifier.clickable { decide(request, true) }.padding(8.dp))
                         }
                     }
                 }
             }
         }
+    }
+
+    rejecting?.let { request ->
+        val user = request["requester"]?.asObj()
+        RejectJoinRequestDialog(
+            name = user?.s("nickname")?.takeIf { it.isNotBlank() } ?: user?.s("username"),
+            onConfirm = { note -> rejecting = null; decide(request, false, note) },
+            onDismiss = { rejecting = null },
+        )
     }
 
     // 盖在申请面板上面（KcSheet 是同层浮层，后画的在上）

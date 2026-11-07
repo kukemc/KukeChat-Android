@@ -150,8 +150,8 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                             Text("群号 ${detail.id} · ${detail.memberCount} 名成员", style = KcTheme.type.caption, color = colors.muted)
                             if (detail.description.isNotBlank()) Text(detail.description, style = KcTheme.type.caption, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
-                        // 分享群聊：转发群名片 / 复制邀请链接
-                        Box(
+                        // 分享群聊：转发群名片 / 复制邀请链接（仅邀请的群，普通成员不显示）
+                        if (detail.canShareInvite) Box(
                             Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(colors.panelMuted).clickable { extras.sheet = GroupExtra.Share },
                             contentAlignment = Alignment.Center,
                         ) { KcIcon(KcIcons.share, tint = colors.text, size = 20.dp, contentDescription = "分享群聊") }
@@ -193,18 +193,10 @@ private fun GroupInfoContent(graph: AppGraph, conversationId: Long, onBack: () -
                             // 成员里的机器人点了直接进机器人详情
                             preview.forEach { member -> MemberTile(member) { if (member.isBot) openBot(member.userId) else onMemberClick(member.userId) } }
                             // 末尾的「邀请 / 移除」虚线位
-                            DashedTile("邀请", KcIcons.plus) {
-                                // 群主 / 管理员：从好友里拉人；普通成员：复制邀请链接
-                                if (detail.manager) extras.sheet = GroupExtra.Invite else scope.launch {
-                                    runCatching { graph.api.post("/invites/group/$conversationId").asObj()?.str("url") }
-                                        .onSuccess { url ->
-                                            if (!url.isNullOrBlank()) {
-                                                copyText(context, url)
-                                                toast(context, "邀请链接已复制，发给想邀请的人")
-                                            }
-                                        }
-                                        .onFailure { toast(context, it.userMessage()) }
-                                }
+                            // 群主 / 管理员：从好友里拉人；普通成员：复制邀请链接（仅邀请的群不给普通成员这个位）
+                            if (detail.canShareInvite) DashedTile("邀请", KcIcons.plus) {
+                                if (detail.manager) extras.sheet = GroupExtra.Invite
+                                else copyInviteLink(graph, conversationId, context, copiedText = "邀请链接已复制，发给想邀请的人")
                             }
                             if (detail.manager) DashedTile("移除", KcIcons.minus) { sub = Sub.Members }
                         }

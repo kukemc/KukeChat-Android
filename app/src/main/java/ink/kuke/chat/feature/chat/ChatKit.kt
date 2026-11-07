@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
@@ -175,6 +176,63 @@ internal fun KcConfirm(
         }
     }
 }
+
+/**
+ * 拒绝入群申请（同手机 QQ）：可以写一句拒绝理由，也可以留空直接拒绝。
+ * 用系统 Dialog 窗口而不是同层浮层，放在列表行、面板里调用都能盖住整屏。
+ * onConfirm 拿到的理由已去掉首尾空白，留空时是 null。
+ */
+@Composable
+internal fun RejectJoinRequestDialog(
+    name: String? = null,
+    onConfirm: (note: String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = KcTheme.colors
+    var note by remember { mutableStateOf("") }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .widthIn(max = 340.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(colors.panel)
+                .padding(20.dp),
+        ) {
+            Text("拒绝入群申请", style = KcTheme.type.title, color = colors.text)
+            if (!name.isNullOrBlank()) {
+                Text("拒绝 $name 的申请，理由会告诉对方。", style = KcTheme.type.secondary, color = colors.muted, modifier = Modifier.padding(top = 8.dp))
+            }
+            Box(
+                Modifier.padding(top = 14.dp).fillMaxWidth().heightIn(min = 88.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(colors.panelMuted).padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                if (note.isEmpty()) Text("拒绝理由（选填）", style = KcTheme.type.body, color = colors.subtle)
+                BasicTextField(
+                    value = note,
+                    onValueChange = { note = it.take(JOIN_REJECT_NOTE_MAX) },
+                    textStyle = KcTheme.type.body.copy(color = colors.text),
+                    cursorBrush = SolidColor(colors.fill),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                "${note.length}/$JOIN_REJECT_NOTE_MAX",
+                style = KcTheme.type.caption,
+                color = colors.subtle,
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                KcButton("取消", onDismiss, modifier = Modifier.weight(1f), primary = false)
+                KcButton("拒绝", { onConfirm(note.trim().ifBlank { null }) }, modifier = Modifier.weight(1f), danger = true)
+            }
+        }
+    }
+}
+
+/** 拒绝理由上限，和服务端 decision_note 的 200 字一致 */
+internal const val JOIN_REJECT_NOTE_MAX = 200
 
 @Composable
 internal fun KcButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, primary: Boolean = true, danger: Boolean = false) {

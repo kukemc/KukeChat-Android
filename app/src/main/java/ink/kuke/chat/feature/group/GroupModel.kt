@@ -59,6 +59,8 @@ data class GroupDetail(
 ) {
     val manager: Boolean get() = myRole == "owner" || myRole == "admin"
     val owner: Boolean get() = myRole == "owner"
+    /** 能不能生成邀请链接：仅邀请的群只有群主 / 管理员可以（普通成员服务端会 403） */
+    val canShareInvite: Boolean get() = manager || joinMode != "invite_only"
 }
 
 fun parseGroupDetail(obj: JsonObject): GroupDetail = GroupDetail(

@@ -68,7 +68,14 @@ data class GroupJoinRequest(
     val id: Long,
     @SerialName("conversation_id") val conversationId: Long = 0,
     val status: String = "pending",
+    /** 拒绝时审核人写的理由（选填，最多 200 字）；旧服务端没有这个字段 */
+    @SerialName("decision_note") val decisionNote: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )
+
+/** 入群申请列表统一排序：待审核的在最前，其余按申请时间倒序（服务端已经这样排，这里再兜一次底） */
+fun <T> List<T>.sortedJoinRequests(status: (T) -> String?, createdAt: (T) -> String?): List<T> =
+    sortedWith(compareBy<T> { if ((status(it) ?: "pending") == "pending") 0 else 1 }.thenByDescending { createdAt(it).orEmpty() })
 
 @Serializable
 data class TempBlock(
@@ -184,8 +191,16 @@ class SocialApi(private val api: Api) {
     suspend fun notifications(limit: Int = 100): NotificationList = api.get("/notifications?limit=$limit").decode(NotificationList.serializer())
 
     suspend fun acceptJoinRequest(id: Long) { api.post("/conversations/join-requests/$id/accept", JsonObject(emptyMap())) }
-    suspend fun rejectJoinRequest(id: Long) { api.post("/conversations/join-requests/$id/reject", JsonObject(emptyMap())) }
-    suspend fun outgoingJoinRequests(): List<GroupJoinRequest> = api.get("/conversations/join-requests/outgoing").asList(GroupJoinRequest.serializer())
+    /** 拒绝入群申请；note 是给申请人看的拒绝理由，留空不填 */
+    suspend fun rejectJoinRequest(id: Long, note: String? = null) {
+        api.post("/conversations/join-requests/$id/reject", buildJsonObject {
+            put("decision_note", note?.trim()?.take(200)?.ifBlank { null })
+        })
+    }
+    suspend fun outgoingJoinRequests(): List<GroupJoinRequest> =
+        api.get("/conversations/join-requests/outgoing").asList(GroupJoinRequest.serializer()).sortedJoinRequests({ it.status }, { it.createdAt })
+    suspend fun incomingJoinRequests(): List<GroupJoinRequest> =
+        api.get("/conversations/join-requests/incoming").asList(GroupJoinRequest.serializer()).sortedJoinRequests({ it.status }, { it.createdAt })
     suspend fun joinGroup(id: Long) { api.post("/conversations/$id/join") }
     suspend fun requestJoinGroup(id: Long, message: String? = null, answer: String? = null) {
         api.post("/conversations/$id/join-requests", buildJsonObject {

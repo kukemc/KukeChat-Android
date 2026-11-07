@@ -91,6 +91,8 @@ data class Conversation(
     @SerialName("my_do_not_disturb") val doNotDisturb: Boolean = false,
     @SerialName("my_message_setting") val messageSetting: String = "notify",
     @SerialName("pending_join_request_count") val pendingJoinRequests: Int = 0,
+    /** 群的入群方式（approval / question / invite_only / open）；私聊、旧缓存为 null */
+    @SerialName("join_mode") val joinMode: String? = null,
     @SerialName("red_packet_pending") val redPacketPending: Boolean = false,
     @SerialName("mention_pending") val mentionPending: String? = null,
     /** 群升级档位（有效档位：free / pro / pro_plus / max），私聊恒为 free（docs/group-plus.md 第 2 节） */
@@ -106,6 +108,9 @@ data class Conversation(
     val spark: Spark? = null,
 ) {
     val isGroup: Boolean get() = type == "group"
+
+    /** 能不能生成邀请链接：仅邀请的群只有群主 / 管理员可以（普通成员服务端会 403）；入群方式未知时先放行，失败再提示 */
+    val canShareInvite: Boolean get() = isGroup && (joinMode != "invite_only" || myRole == "owner" || myRole == "admin")
 
     /** 「我的设备」会话（docs/self-chat.md）：只有自己，各端自己起名（手机上叫「我的电脑」），没有对方资料 */
     val isSelf: Boolean get() = type == SELF_TYPE

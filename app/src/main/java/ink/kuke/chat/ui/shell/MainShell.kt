@@ -314,6 +314,18 @@ private fun Tabs(graph: AppGraph, nav: NavHostController) {
             if (t == "notification.seen" || t == "friend.request.ignored" || t.startsWith("friend_request.") || t.startsWith("friend.request") || t.startsWith("group.join_request")) {
                 ink.kuke.chat.feature.contacts.PendingRequests.refresh(graph)
             }
+            // 自己的入群申请被拒：提示一下，有拒绝理由就带上
+            if (t == "group.join_request.rejected") {
+                val me = graph.session.session.value?.user?.id
+                val data = event.data
+                val requester = (data["requester_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+                if (me != null && requester == me) {
+                    fun str(key: String) = (data[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotBlank() }
+                    val group = str("conversation_display_title") ?: str("conversation_title") ?: "群聊"
+                    val note = str("decision_note")
+                    ink.kuke.chat.feature.chat.toast(context, "「$group」拒绝了你的入群申请" + (note?.let { "，拒绝理由：$it" } ?: ""))
+                }
+            }
         }
     }
 

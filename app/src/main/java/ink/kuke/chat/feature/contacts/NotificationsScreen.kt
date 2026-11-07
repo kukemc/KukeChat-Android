@@ -73,6 +73,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
@@ -121,6 +122,11 @@ private object NotificationStore {
     val outcomes = mutableStateMapOf<String, String>()
     /** 正在处理的申请 */
     val busy = mutableStateMapOf<String, Boolean>()
+    /**
+     * 入群申请的拒绝理由：申请 id -> 理由。统一通知里不带这个字段，
+     * 从 GET /conversations/join-requests/outgoing、incoming 里补；自己刚拒绝时直接记下。
+     */
+    val decisionNotes = mutableStateMapOf<Long, String>()
 
     private var ownerId: Long? = null
     private val mutex = Mutex()
@@ -133,6 +139,7 @@ private object NotificationStore {
             error = null
             outcomes.clear()
             busy.clear()
+            decisionNotes.clear()
         }
     }
 
@@ -144,21 +151,35 @@ private object NotificationStore {
                 .onSuccess { list = it; error = null; PendingRequests.apply(it) }
                 .onFailure { if (list == null) error = it.userMessage() }
         }
+        loadDecisionNotes(graph)
     }
 
-    suspend fun decide(graph: AppGraph, n: UnifiedNotification, accept: Boolean): Result<Unit> {
+    /** 只有列表里有已拒绝的入群申请时才去拉；拉不到不影响通知本身 */
+    private suspend fun loadDecisionNotes(graph: AppGraph) {
+        val rejected = list?.items.orEmpty().filter { it.groupJoinRequestId != null && joinStatus(it) == "rejected" }
+        if (rejected.isEmpty()) return
+        val social = SocialApi(graph.api)
+        val requests = buildList {
+            if (rejected.any { it.type == "group.join_request.outgoing" }) runCatching { social.outgoingJoinRequests() }.onSuccess { addAll(it) }
+            if (rejected.any { it.type == "group.join_request.incoming" }) runCatching { social.incomingJoinRequests() }.onSuccess { addAll(it) }
+        }
+        requests.forEach { r -> r.decisionNote?.takeIf { it.isNotBlank() }?.let { decisionNotes[r.id] = it } }
+    }
+
+    suspend fun decide(graph: AppGraph, n: UnifiedNotification, accept: Boolean, note: String? = null): Result<Unit> {
         val social = SocialApi(graph.api)
         busy[n.id] = true
         val result = runCatching {
             when {
                 n.friendRequestId != null -> if (accept) social.acceptFriendRequest(n.friendRequestId) else social.rejectFriendRequest(n.friendRequestId)
-                n.groupJoinRequestId != null -> if (accept) social.acceptJoinRequest(n.groupJoinRequestId) else social.rejectJoinRequest(n.groupJoinRequestId)
+                n.groupJoinRequestId != null -> if (accept) social.acceptJoinRequest(n.groupJoinRequestId) else social.rejectJoinRequest(n.groupJoinRequestId, note)
                 else -> error("这条通知已经处理过了")
             }
         }
         busy.remove(n.id)
         result.onSuccess {
             outcomes[n.id] = if (accept) (if (n.friendRequestId != null) "已接受" else "已通过") else "已拒绝"
+            if (!accept && n.groupJoinRequestId != null && !note.isNullOrBlank()) decisionNotes[n.groupJoinRequestId] = note
             PendingRequests.remove(n.id)
         }
         return result
@@ -197,6 +218,19 @@ private object NotificationStore {
     }
 }
 
+/** 入群申请通知的状态：payload.status（pending / accepted / rejected），本次运行里自己处理过的以结果为准 */
+private fun joinStatus(n: UnifiedNotification): String? =
+    if (NotificationStore.outcomes[n.id] == "已拒绝") "rejected"
+    else runCatching { n.payload?.get("status")?.jsonPrimitive?.contentOrNull }.getOrNull()
+
+/** 被拒绝的入群申请的理由：优先通知自带的（新服务端可能放进 payload），其次从申请列表补到的 */
+private fun decisionNoteOf(n: UnifiedNotification): String? {
+    val id = n.groupJoinRequestId ?: return null
+    if (joinStatus(n) != "rejected") return null
+    val inline = runCatching { n.payload?.get("decision_note")?.jsonPrimitive?.contentOrNull }.getOrNull()
+    return (inline ?: NotificationStore.decisionNotes[id])?.trim()?.takeIf { it.isNotBlank() }
+}
+
 /** 一条是否还需要我处理（接受 / 拒绝） */
 private fun actionable(n: UnifiedNotification) =
     n.pending && NotificationStore.outcomes[n.id] == null && (n.friendRequestId != null || n.groupJoinRequestId != null)
@@ -211,10 +245,18 @@ private class NotificationController(
     private val view: android.view.View,
     private val toast: ToastState,
 ) {
-    fun decide(n: UnifiedNotification, accept: Boolean) {
+    /** 正在填拒绝理由的入群申请（弹框由 rememberNotificationController 画） */
+    var rejecting by mutableStateOf<UnifiedNotification?>(null)
+
+    fun decide(n: UnifiedNotification, accept: Boolean, note: String? = null) {
         if (NotificationStore.busy[n.id] == true) return
+        // 拒绝入群申请先问理由（选填）；好友申请照旧直接拒绝
+        if (!accept && n.groupJoinRequestId != null && rejecting == null && note == null) {
+            rejecting = n
+            return
+        }
         scope.launch {
-            NotificationStore.decide(graph, n, accept)
+            NotificationStore.decide(graph, n, accept, note)
                 .onSuccess {
                     Haptics.confirm(view)
                     if (accept && n.friendRequestId != null) graph.conversations.refreshSoon()
@@ -268,6 +310,13 @@ private fun rememberNotificationController(graph: AppGraph, toast: ToastState): 
             delay(300)
             NotificationStore.refresh(graph)
         }
+    }
+    controller.rejecting?.let { n ->
+        ink.kuke.chat.feature.chat.RejectJoinRequestDialog(
+            name = n.actor?.displayName,
+            onConfirm = { note -> controller.rejecting = null; controller.decide(n, false, note ?: "") },
+            onDismiss = { controller.rejecting = null },
+        )
     }
     return controller
 }
@@ -505,11 +554,13 @@ private fun rowText(n: UnifiedNotification): RowText {
     val extras = parts.drop(1).joinToString(" · ").ifBlank { null }
     val group = n.conversationTitle?.takeIf { it.isNotBlank() } ?: "群聊"
     fun join(vararg s: String?) = s.filterNot { it.isNullOrBlank() }.joinToString(" · ").ifBlank { null }
+    // 服务端以后若把理由写进 body，就不再重复拼一遍
+    val reason = decisionNoteOf(n)?.takeIf { extras?.contains("拒绝理由") != true }?.let { "拒绝理由：$it" }
     return when (n.type) {
         "friend.request.incoming" -> RowText(bolded(actorName ?: n.title, ""), "请求添加你为好友", if (n.pending) null else state)
         "friend.request.outgoing" -> RowText(bolded(actorName ?: n.title, ""), "你发出的好友申请", state)
-        "group.join_request.incoming" -> RowText(bolded(actorName ?: n.title, ""), join("申请加入 $group", extras), if (n.pending) null else state)
-        "group.join_request.outgoing" -> RowText(bolded(group, ""), join("你申请加入这个群", extras), state)
+        "group.join_request.incoming" -> RowText(bolded(actorName ?: n.title, ""), join("申请加入 $group", extras, reason), if (n.pending) null else state)
+        "group.join_request.outgoing" -> RowText(bolded(group, ""), join(reason, "你申请加入这个群", extras), state)
         else -> {
             val headline = if (actorName != null && n.title.startsWith(actorName)) {
                 // 服务端标题是「名字点赞了你的动态」，名字和动作之间补一个空格更好读

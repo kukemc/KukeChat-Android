@@ -506,6 +506,8 @@ private fun NewFriendsSection(list: List<UnifiedNotification>, social: SocialApi
     val type = KcTheme.type
     val scope = rememberCoroutineScope()
     val busy = remember { androidx.compose.runtime.mutableStateMapOf<String, Boolean>() }
+    // 正在填拒绝理由的入群申请
+    var rejecting by remember { mutableStateOf<UnifiedNotification?>(null) }
     Column(
         Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(colors.panel),
     ) {
@@ -540,7 +542,7 @@ private fun NewFriendsSection(list: List<UnifiedNotification>, social: SocialApi
                         busy.remove(n.id)
                     }
                 }
-                fun act(accept: Boolean) {
+                fun act(accept: Boolean, note: String? = null) {
                     if (working) return
                     busy[n.id] = true
                     scope.launch {
@@ -549,7 +551,7 @@ private fun NewFriendsSection(list: List<UnifiedNotification>, social: SocialApi
                                 friend && accept -> social.acceptFriendRequest(n.friendRequestId!!)
                                 friend -> social.rejectFriendRequest(n.friendRequestId!!)
                                 accept -> social.acceptJoinRequest(n.groupJoinRequestId!!)
-                                else -> social.rejectJoinRequest(n.groupJoinRequestId!!)
+                                else -> social.rejectJoinRequest(n.groupJoinRequestId!!, note)
                             }
                         }.onSuccess { PendingRequests.remove(n.id) }
                             .onFailure { onError(it.userMessage()) }
@@ -557,12 +559,30 @@ private fun NewFriendsSection(list: List<UnifiedNotification>, social: SocialApi
                     }
                 }
                 if (friend) SmallPill("忽略", colors.text.copy(alpha = 0.06f), colors.text, working) { ignore() }
-                else SmallPill("拒绝", colors.text.copy(alpha = 0.06f), colors.text, working) { act(false) }
+                else SmallPill("拒绝", colors.text.copy(alpha = 0.06f), colors.text, working) { rejecting = n }
                 Spacer(Modifier.width(8.dp))
                 SmallPill(if (friend) "接受" else "通过", colors.fill, colors.onFill, working) { act(true) }
             }
         }
         Spacer(Modifier.height(6.dp))
+    }
+    rejecting?.let { n ->
+        ink.kuke.chat.feature.chat.RejectJoinRequestDialog(
+            name = n.actor?.displayName,
+            onConfirm = { note ->
+                rejecting = null
+                val id = n.groupJoinRequestId ?: return@RejectJoinRequestDialog
+                if (busy[n.id] == true) return@RejectJoinRequestDialog
+                busy[n.id] = true
+                scope.launch {
+                    runCatching { social.rejectJoinRequest(id, note) }
+                        .onSuccess { PendingRequests.remove(n.id) }
+                        .onFailure { onError(it.userMessage()) }
+                    busy.remove(n.id)
+                }
+            },
+            onDismiss = { rejecting = null },
+        )
     }
 }
 

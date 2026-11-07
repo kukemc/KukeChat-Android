@@ -426,13 +426,17 @@ internal fun GroupExtrasHost(extras: GroupExtras, model: GroupModel, onMemberAdd
             close()
             model.doCheckin(message) { toast(context, it) }
         }
-        GroupExtra.Invite -> InviteFriendsSheet(graph, extras.conversationId, manager = detail?.manager == true, onDismiss = close, onAdded = onMemberAdded)
+        GroupExtra.Invite -> InviteFriendsSheet(graph, extras.conversationId, manager = detail?.manager == true, canShareLink = detail?.canShareInvite != false, onDismiss = close, onAdded = onMemberAdded)
         GroupExtra.Share -> KcSheet(onDismiss = close, title = "分享群聊") {
-            SheetRow("转发群聊名片", { extras.sheet = GroupExtra.ShareForward }, icon = KcIcons.send, detail = "发到一个会话，对方点卡片就能加入")
-            SheetRow("复制邀请链接", {
-                close()
-                copyInviteLink(graph, extras.conversationId, context)
-            }, icon = KcIcons.copy)
+            if (detail?.canShareInvite == false) {
+                Text("这个群仅限群主或管理员邀请，你暂时不能分享。", style = KcTheme.type.caption, color = KcTheme.colors.muted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+            } else {
+                SheetRow("转发群聊名片", { extras.sheet = GroupExtra.ShareForward }, icon = KcIcons.send, detail = "发到一个会话，对方点卡片就能加入")
+                SheetRow("复制邀请链接", {
+                    close()
+                    copyInviteLink(graph, extras.conversationId, context)
+                }, icon = KcIcons.copy)
+            }
             Box(Modifier.height(8.dp))
         }
         GroupExtra.ShareForward -> if (detail != null) ShareCardSheet(graph, detail, onBack = { extras.sheet = GroupExtra.Share }, onDone = close)
@@ -472,20 +476,25 @@ internal fun GroupExtrasHost(extras: GroupExtras, model: GroupModel, onMemberAdd
     }
 }
 
-private fun copyInviteLink(graph: AppGraph, conversationId: Long, context: android.content.Context) {
+/** 复制群邀请链接（会话列表长按、群资料共用） */
+internal fun copyInviteLink(graph: AppGraph, conversationId: Long, context: android.content.Context, copiedText: String = "邀请链接已复制") {
     graph.scope.launch {
         runCatching { graph.api.post("/invites/group/$conversationId").asObj()?.s("url") }
             .onSuccess { url ->
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     if (url.isNullOrBlank()) toast(context, "邀请链接生成失败") else {
                         copyText(context, url)
-                        toast(context, "邀请链接已复制")
+                        toast(context, copiedText)
                     }
                 }
             }
-            .onFailure { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { toast(context, it.userMessage()) } }
+            .onFailure { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { toast(context, inviteLinkError(it)) } }
     }
 }
+
+/** 生成邀请链接失败：403 是仅邀请的群、自己不是群主 / 管理员 */
+internal fun inviteLinkError(e: Throwable): String =
+    if ((e as? ink.kuke.chat.core.net.ApiException)?.status == 403) "这个群仅限群主或管理员邀请，你暂时不能分享邀请链接" else e.userMessage()
 
 // ------------------------------------------------------------------ 签到
 
@@ -628,7 +637,7 @@ private fun BoardLine(row: BoardRow, type: String, me: Boolean = false) {
  * 409 group_full：群满员，提示原因，群主 / 管理员多一个「去升级」。顶上还有「复制邀请链接」。
  */
 @Composable
-private fun InviteFriendsSheet(graph: AppGraph, conversationId: Long, manager: Boolean, onDismiss: () -> Unit, onAdded: () -> Unit) {
+private fun InviteFriendsSheet(graph: AppGraph, conversationId: Long, manager: Boolean, canShareLink: Boolean, onDismiss: () -> Unit, onAdded: () -> Unit) {
     val colors = KcTheme.colors
     val context = LocalContext.current
     val nav = LocalAppNav.current
@@ -656,9 +665,9 @@ private fun InviteFriendsSheet(graph: AppGraph, conversationId: Long, manager: B
         }
     }
     KcSheet(onDismiss = onDismiss, title = "邀请好友", maxHeight = 640.dp) {
-        SheetRow("复制邀请链接", { copyInviteLink(graph, conversationId, context) }, icon = KcIcons.link, detail = "发到任意地方")
+        if (canShareLink) SheetRow("复制邀请链接", { copyInviteLink(graph, conversationId, context) }, icon = KcIcons.link, detail = "发到任意地方")
         if (!manager) {
-            Text("只有群主和管理员可以直接拉好友进群，你可以把邀请链接发给他们。", style = KcTheme.type.caption, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+            Text(if (canShareLink) "只有群主和管理员可以直接拉好友进群，你可以把邀请链接发给他们。" else "这个群仅限群主或管理员邀请。", style = KcTheme.type.caption, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
             Box(Modifier.height(8.dp))
             return@KcSheet
         }
@@ -813,7 +822,7 @@ private fun ShareCardSheet(graph: AppGraph, detail: GroupDetail, onBack: () -> U
                         graph.conversations.refreshSoon(0)
                         toast(context, "群聊名片已发送")
                         onDone()
-                    }.onFailure { toast(context, it.userMessage()) }
+                    }.onFailure { toast(context, inviteLinkError(it)) }
                     busy = false
                 }
             }, enabled = target != null && !busy, modifier = Modifier.weight(1f))
