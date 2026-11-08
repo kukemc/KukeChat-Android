@@ -20,6 +20,9 @@ object DslText {
     /** 服务端的消息长度上限（MAX_MESSAGE_CONTENT_LENGTH），含围栏 */
     const val MAX_LENGTH = 2000
 
+    /** Gandi 3.0 DSL 语法文档（积木卡片底部、输入框预览里的「语法文档」，同电脑版 DSL_DOCS_URL） */
+    const val DOCS_URL = "https://gandi.kuke.ink/docs/dsl-syntax"
+
     private val fenceOpen = Regex("""^[ \t]*```[ \t]*([\w-]*)[ \t]*$""")
     private val fenceClose = Regex("""^[ \t]*```[ \t]*$""")
 
@@ -91,6 +94,13 @@ object DslText {
 
     /** 有积木围栏，或预筛通过（只做字符串判断） */
     fun mayContainDsl(text: String): Boolean = split(text) != null || looksLikeDsl(text)
+
+    /** 输入框里的文字要不要出积木预览：有积木围栏（且里面有代码），或整段看着像积木。只做字符串判断。 */
+    fun composerCandidate(text: String): Boolean {
+        val segments = split(text)
+        if (segments != null) return segments.any { it is DslSegment.Block && it.code.isNotBlank() }
+        return looksLikeDsl(text)
+    }
 
     /** 把一段积木文本包成发消息用的围栏 */
     fun wrap(code: String): String = "```$FENCE_LANG\n${code.trimEnd()}\n```"

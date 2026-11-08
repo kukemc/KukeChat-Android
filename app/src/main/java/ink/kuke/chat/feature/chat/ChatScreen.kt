@@ -108,7 +108,6 @@ private sealed interface Overlay {
     data object RedPacketSend : Overlay
     data object GiftSend : Overlay
     data object PollCreate : Overlay
-    data object DslEditor : Overlay
     data object PokePick : Overlay
     data object ConfirmClear : Overlay
     data class Report(val target: ReportTarget) : Overlay
@@ -721,7 +720,6 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                             "redPacket" -> Overlay.RedPacketSend
                             "gift" -> Overlay.GiftSend
                             "poke" -> Overlay.PokePick
-                            "dsl" -> Overlay.DslEditor
                             else -> null
                         }
                     },
@@ -907,7 +905,6 @@ fun ChatScreen(graph: AppGraph, conversationId: Long, onBack: () -> Unit, focusM
                 )
                 Overlay.GiftSend -> GiftSheet(controller, conversation, onDismiss = close)
                 Overlay.PollCreate -> PollCreateSheet(controller, onDismiss = close)
-                Overlay.DslEditor -> DslEditorSheet(controller, onDismiss = close, onSent = afterSend)
                 Overlay.PokePick -> MemberPickSheet(controller, title = "戳一戳谁", excludeMe = true, onDismiss = close) {
                     controller.poke(it.userId)
                     overlay = null

@@ -125,7 +125,7 @@ fun Composer(
     onSent: () -> Unit,
     isGroup: Boolean = false,
     canMentionAll: Boolean = false,
-    /** 工具面板里的工具（image / camera / file / poll / redPacket / gift / dsl / poke）交给聊天页去开面板 */
+    /** 工具面板里的工具（image / camera / file / poll / redPacket / gift / poke）交给聊天页去开面板 */
     onTool: (String) -> Unit = {},
     /** 聊天区被点了一下就自增：收起键盘和面板 */
     dismissToken: Int = 0,
@@ -221,6 +221,10 @@ fun Composer(
     LaunchedEffect(imeHeight > 0) { if (imeHeight > 0) panel = Panel.None }
     BackHandler(enabled = panel != Panel.None) { panel = Panel.None }
 
+    // 输入框里写着积木文本：上方出积木预览，发送时整条是积木就包成围栏（DslBlocks.kt）。点 × 的那段按普通文字发
+    var dslDismissed by remember { mutableStateOf<String?>(null) }
+    val dslPreview = rememberComposerDslPreview(value.text, enabled = !voiceMode && dslDismissed != value.text)
+
     // 乐观发送：点了就清空输入框、消息立刻出现在列表末尾（发送中 / 失败的状态画在消息旁边），不等接口，可以连发
     fun send() {
         val text = value.text.trim()
@@ -228,8 +232,11 @@ fun Composer(
         val finalText = value.text.trimEnd()
         val usedMentions = mentions.filter { (_, name) -> finalText.contains("@$name") }.distinctBy { it.first }
         val all = canMentionAll && finalText.contains("@全体成员")
-        if (controller.sendText(finalText, usedMentions, all)) {
+        // @ 了人的不包围栏（提及按文字匹配，包了也不影响，但和电脑版保持一致）
+        val content = if (usedMentions.isEmpty() && !all) dslContentForSend(finalText, dslPreview) else finalText
+        if (controller.sendText(content, usedMentions, all)) {
             value = TextFieldValue("")
+            dslDismissed = null
             mentions.clear()
             Drafts.set(controller.conversationId, "")
             ink.kuke.chat.ui.components.Haptics.confirm(view)
@@ -272,6 +279,9 @@ fun Composer(
                         KcIcon(KcIcons.close, tint = colors.subtle, size = 16.dp, contentDescription = "取消引用")
                     }
                 }
+            }
+            if (dslPreview != null && mentionQuery == null && commandPrefix == null) {
+                DslComposerPreview(dslPreview) { dslDismissed = value.text }
             }
             if (mentionQuery != null) {
                 MentionPanel(controller, mentionQuery.second, canMentionAll) { member ->
@@ -626,7 +636,6 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: 
         Tool("camera", "拍照", KcIcons.camera, Color(0xFF0E9AB8)),
         // 临时文件：任意类型，24 小时后过期（docs/self-chat.md 第 5 节）
         Tool("file", "文件", KcIcons.paperclip, Color(0xFF12A679)),
-        Tool("dsl", "积木", KcIcons.blocks, Color(0xFF855CD6)),
     ) else buildList {
         add(Tool("image", "图片", KcIcons.image, Color(0xFF1F6BFF)))
         // 拍照：调系统相机拍一张，拍完进发图确认面板（同相册选的图）
@@ -637,8 +646,6 @@ private fun ToolsPanel(height: Dp, isGroup: Boolean, selfChat: Boolean, onTool: 
         add(Tool("poll", "发起投票", KcIcons.poll, Color(0xFFF0700A)))
         add(Tool("redPacket", "红包", KcIcons.redPacket, Color(0xFFE5484D)))
         add(Tool("gift", "礼物", KcIcons.gift, Color(0xFFE64F8A)))
-        // 积木：写 Gandi 积木文本、实时预览，发成 ```gandi-dsl 围栏（DslBlocks.kt）
-        add(Tool("dsl", "积木", KcIcons.blocks, Color(0xFF855CD6)))
         if (isGroup) add(Tool("command", "机器人指令", KcIcons.bot, Color(0xFF7A55D6)))
         if (isGroup) add(Tool("poke", "戳一戳", KcIcons.poke, Color(0xFFE39B00)))
     }

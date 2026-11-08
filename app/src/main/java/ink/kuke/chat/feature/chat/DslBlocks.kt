@@ -72,6 +72,11 @@ import ink.kuke.chat.core.dsl.DslRenderer
 import ink.kuke.chat.core.dsl.DslSegment
 import ink.kuke.chat.core.dsl.DslText
 import ink.kuke.chat.core.model.Message
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.text.style.TextOverflow
 import ink.kuke.chat.ui.icons.KcIcon
 import ink.kuke.chat.ui.icons.KcIcons
 import ink.kuke.chat.ui.theme.KcTheme
@@ -89,7 +94,7 @@ import kotlinx.coroutines.withContext
 /** 卡片里积木图的限高：更长的脚本点「展开全部」 */
 private val DSL_COLLAPSED_HEIGHT = 320.dp
 
-/** 编辑器预览停手多久再画（同电脑版 300 ms，手机上打字慢一点，取 350） */
+/** 输入框积木预览停手多久再画（同电脑版 300 ms，手机上打字慢一点，取 350） */
 private const val DSL_PREVIEW_DEBOUNCE_MS = 350L
 
 /** 渲染倍率：按设备密度画，3 倍以上看不出差别，只多占内存 */
@@ -257,7 +262,39 @@ internal fun DslBlockCard(code: String, mine: Boolean, modifier: Modifier = Modi
                 if (compileError) DslDiagnosticList(current.diagnostics, Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp))
             }
         }
+        DslAbout()
     }
+}
+
+/** 卡片底部的说明：这是什么、怎么用、去哪看文档（同电脑版 DslAbout）。 */
+@Composable
+private fun DslAbout() {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    Column(
+        Modifier.fillMaxWidth()
+            .drawBehind { drawRect(colors.border, size = androidx.compose.ui.geometry.Size(size.width, 1.dp.toPx())) }
+            .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        Text("这是 Gandi 3.0 的 DSL 积木语法，可以直接粘贴进 Gandi 编辑器，也能在编辑器里把积木复制为 DSL。", style = type.caption, color = colors.subtle)
+        DslDocsLink(Modifier.padding(top = 2.dp), "查看语法文档")
+    }
+}
+
+/** 打开 Gandi 3.0 DSL 语法文档 */
+@Composable
+private fun DslDocsLink(modifier: Modifier = Modifier, label: String = "语法文档") {
+    val colors = KcTheme.colors
+    val uri = LocalUriHandler.current
+    val context = LocalContext.current
+    Text(
+        label,
+        style = KcTheme.type.caption,
+        color = colors.accent,
+        modifier = modifier.clip(RoundedCornerShape(6.dp))
+            .clickable { runCatching { uri.openUri(DslText.DOCS_URL) }.onFailure { toast(context, "打不开链接") } }
+            .padding(vertical = 2.dp),
+    )
 }
 
 /** 积木 / 代码 两段切换 */
@@ -388,82 +425,42 @@ private suspend fun saveDslImage(context: Context, bitmap: Bitmap, background: C
     toast(context, if (ok) "已保存到相册" else "保存失败")
 }
 
-private const val DSL_TEMPLATE = """when.flagclicked(() => {
-  looks.say("你好！");
-  repeat(10, () => {
-    motion.movesteps(10);
-    motion.turnright(15);
-  });
-});"""
+/** 输入框上方积木预览的结果：对应哪段文字、渲染页的结果。发送时看它决定要不要包成积木围栏。 */
+internal class ComposerDslPreview(val text: String, val result: DslRenderResult?)
 
 /**
- * 输入框工具面板里的「积木」：写积木文本、实时预览（停手 350 ms 再画）、报错逐条列出，
- * 发出去的是一个 ```gandi-dsl 围栏。消息上限 2000 字（含围栏），超了不能发。
+ * 输入框上方的积木预览：输入框里写着（或粘贴了）积木文本时出现，停手 350 ms 再画；编得过显示积木，编不过列出错误。
+ * 点 × 这段就按普通文字发（改了文字后重新出现）。规则同电脑版 DslComposerPreview.tsx。
  */
 @Composable
-internal fun DslEditorSheet(controller: ChatController, onDismiss: () -> Unit, onSent: () -> Unit) {
+internal fun DslComposerPreview(preview: ComposerDslPreview, onDismiss: () -> Unit) {
     val colors = KcTheme.colors
     val type = KcTheme.type
-    val context = LocalContext.current
-    var code by rememberSaveable { mutableStateOf("") }
-    val dark = colors.isDark
-    val scale = dslScale()
-    val length = if (code.isBlank()) 0 else DslText.wrap(code).length
-    val overLimit = length > DslText.MAX_LENGTH
-    var preview by remember { mutableStateOf<DslRenderResult?>(null) }
-    var previewing by remember { mutableStateOf(false) }
-    LaunchedEffect(code, dark, scale) {
-        if (code.isBlank()) {
-            preview = null
-            previewing = false
-            return@LaunchedEffect
-        }
-        previewing = true
-        delay(DSL_PREVIEW_DEBOUNCE_MS)
-        preview = DslRenderer.render(code, dark, scale)
-        previewing = false
+    val current = preview.result
+    val title = when {
+        current == null -> "正在识别积木…"
+        current.ok && current.bitmap != null -> "积木预览 · 发出去对方看到的就是积木"
+        current.renderFailed -> "识别为积木（这里画不了预览，对方能看到积木）"
+        else -> "积木文本有错，改好之前发出去是普通文字"
     }
-
-    KcSheet(onDismiss = onDismiss, title = "发送积木", maxHeight = 720.dp) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("积木文本（Gandi 3.0 DSL）", style = type.secondary, color = colors.muted, modifier = Modifier.weight(1f))
-                Text("$length/${DslText.MAX_LENGTH}", style = type.caption, color = if (overLimit) colors.danger else colors.subtle)
+    val error = current != null && !current.ok && !current.renderFailed
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp).fillMaxWidth()
+            .shadow(2.dp, shape).background(colors.panel, shape),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (current == null) SendSpinner(12.dp, colors.muted, null) else KcIcon(KcIcons.blocks, tint = if (error) colors.danger else colors.muted, size = 14.dp)
+            Text(title, style = type.caption, color = if (error) colors.danger else colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 6.dp))
+            DslDocsLink(Modifier.padding(horizontal = 4.dp))
+            Box(Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onDismiss), contentAlignment = Alignment.Center) {
+                KcIcon(KcIcons.close, tint = colors.subtle, size = 14.dp, contentDescription = "不当积木，按普通文字发")
             }
-            Box(
-                Modifier.fillMaxWidth().heightIn(min = 140.dp, max = 220.dp)
-                    .clip(RoundedCornerShape(12.dp)).background(colors.panelMuted)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            ) {
-                val codeStyle = type.body.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp)
-                if (code.isEmpty()) Text(DSL_TEMPLATE, style = codeStyle, color = colors.subtle)
-                BasicTextField(
-                    value = code,
-                    onValueChange = { code = it },
-                    textStyle = codeStyle.copy(color = colors.text),
-                    cursorBrush = SolidColor(colors.fill),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            if (code.isEmpty()) {
-                Text("用模板开始", style = type.caption, color = colors.accent, modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { code = DSL_TEMPLATE }.padding(vertical = 2.dp))
-            }
-            Text("预览", style = type.secondary, color = colors.muted)
-            Box(
-                Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 260.dp)
-                    .clip(RoundedCornerShape(12.dp)).border(1.dp, colors.border, RoundedCornerShape(12.dp))
-                    .verticalScroll(rememberScrollState())
-                    .padding(10.dp),
-            ) {
-                val current = preview
-                when {
-                    code.isBlank() -> Text("在上面写积木文本，这里实时显示积木", style = type.caption, color = colors.subtle, modifier = Modifier.align(Alignment.Center))
-                    current == null -> Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
-                        SendSpinner(14.dp, colors.muted, null)
-                        Text("正在生成积木…", style = type.caption, color = colors.muted, modifier = Modifier.padding(start = 8.dp))
-                    }
-                    current.ok && current.bitmap != null -> BoxWithConstraints(Modifier.fillMaxWidth()) {
+        }
+        if (current != null && (current.ok && current.bitmap != null || error)) {
+            Box(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
+                if (current.ok && current.bitmap != null) {
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
                         val natural = current.width.dp
                         val w = if (natural < maxWidth) natural else maxWidth
                         Image(
@@ -473,24 +470,40 @@ internal fun DslEditorSheet(controller: ChatController, onDismiss: () -> Unit, o
                             modifier = Modifier.width(w).height(w * (current.height / current.width)),
                         )
                     }
-                    current.renderFailed -> Text("这里画不了积木，发出去以后对方在能画积木的地方会看到积木", style = type.caption, color = colors.muted)
-                    else -> DslDiagnosticList(current.diagnostics)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                KcButton("取消", onDismiss, modifier = Modifier.weight(1f), primary = false)
-                KcButton(
-                    "发送",
-                    {
-                        if (controller.sendText(DslText.wrap(code))) {
-                            onDismiss()
-                            onSent()
-                        } else toast(context, "发送失败")
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = code.isNotBlank() && !overLimit,
-                )
+                } else DslDiagnosticList(current.diagnostics)
             }
         }
     }
+}
+
+/**
+ * 输入框文字对应的积木预览：不像积木 → null；像 → 停手 [DSL_PREVIEW_DEBOUNCE_MS] 再交给渲染页画（结果里的 text 是画的那一版）。
+ */
+@Composable
+internal fun rememberComposerDslPreview(text: String, enabled: Boolean): ComposerDslPreview? {
+    val dark = KcTheme.colors.isDark
+    val scale = dslScale()
+    val candidate = enabled && DslText.composerCandidate(text)
+    var preview by remember { mutableStateOf<ComposerDslPreview?>(null) }
+    LaunchedEffect(text, candidate, dark, scale) {
+        if (!candidate) {
+            preview = null
+            return@LaunchedEffect
+        }
+        delay(DSL_PREVIEW_DEBOUNCE_MS)
+        preview = ComposerDslPreview(text, DslRenderer.render(text, dark, scale))
+    }
+    // 打字时先留着上一次的图（不闪）；发送时按 text 对得上才算数
+    return if (candidate) preview ?: ComposerDslPreview(text, null) else null
+}
+
+/**
+ * 发送前：整条消息被渲染页认作积木（[DslRenderResult.detected]，且是这段文字的结果）→ 包成 ```gandi-dsl 围栏发，
+ * 对方认不全的地方也一定显示成积木。已经有围栏、还没判完、包了超长 → 原样发。
+ */
+internal fun dslContentForSend(text: String, preview: ComposerDslPreview?): String {
+    if (preview == null || preview.text.trim() != text.trim() || preview.result?.detected != true) return text
+    if (DslText.split(text) != null) return text
+    val wrapped = DslText.wrap(text.trim())
+    return if (wrapped.length <= DslText.MAX_LENGTH) wrapped else text
 }
