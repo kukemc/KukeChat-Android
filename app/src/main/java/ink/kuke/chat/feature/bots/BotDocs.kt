@@ -51,7 +51,10 @@ internal fun BotDocsPage(onBack: () -> Unit) {
                         "POST" to "/bot-api/users/{user_id}/messages  临时私聊发私信",
                         "POST" to "/bot-api/conversations/{id}/messages/{mid}/recall  撤回消息",
                         "POST" to "/bot-api/uploads/image  上传图片",
-                        "POST" to "/bot-api/uploads/voice  上传语音",
+                        "POST" to "/bot-api/uploads/voice  上传语音（最大 2MB）",
+                        "POST" to "/bot-api/conversations/{id}/files  发群文件（群需 Pro 及以上）",
+                        "POST" to "/bot-api/conversations/{id}/files/uploads  大文件直传开单",
+                        "POST" to "/bot-api/conversations/{id}/files/uploads/{upload_id}/complete  直传完成",
                     ),
                 )
             }
