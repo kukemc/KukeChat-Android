@@ -3,6 +3,8 @@ package ink.kuke.chat.feature.chat
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
@@ -16,7 +18,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import ink.kuke.chat.core.AppGraph
 import ink.kuke.chat.core.model.Message
+import ink.kuke.chat.core.net.ApiException
 import ink.kuke.chat.core.net.KcJson
+import ink.kuke.chat.core.net.await
 import ink.kuke.chat.core.net.userMessage
 import ink.kuke.chat.feature.groupfiles.PickedFile
 import ink.kuke.chat.feature.groupfiles.sendGroupFile
@@ -30,6 +34,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -43,9 +48,13 @@ import kotlinx.serialization.json.put
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -345,7 +354,11 @@ internal class ChatEntry(val message: Message, val pending: PendingMessage?)
 internal fun newClientNonce(): String = java.util.UUID.randomUUID().toString().replace("-", "")
 
 private const val MAX_IMAGE_BYTES = AnimatedImages.MAX_BYTES
-private const val MAX_EDGE = 2560
+// 服务端（不管直传还是普通上传）最后都缩到最长边 2048；直传时后端不再缩，超了就退回后端重新处理，所以这里直接压到 2048
+private const val MAX_EDGE = 2048
+// 直传要客户端自己出缩略图：最长边 360 的 JPEG、最多 256KB（同服务端 IMAGE_THUMBNAIL_MAX_DIMENSION / DIRECT_THUMBNAIL_MAX_BYTES）
+private const val THUMB_EDGE = 360
+private const val MAX_THUMB_BYTES = 256 * 1024
 
 /**
  * 读出图片、压到服务端的上限以内（3MB、1200 万像素）；返回图片地址。[onProgress] 报上传进度。
@@ -357,7 +370,12 @@ internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: 
     val raw = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("读不到这张图片")
     val animated = AnimatedImages.detect(raw)
     if (animated != null && raw.size > MAX_IMAGE_BYTES) error(AnimatedImages.TOO_LARGE)
+    var thumbnail: ByteArray? = null
     val (bytes, type, ext) = if (animated != null) {
+        // GIF 能直传（BitmapFactory 只解第一帧，正好做缩略图）；动态 WebP / APNG 要服务端转成 GIF，只能普通上传
+        if (animated == AnimatedFormat.Gif) {
+            BitmapFactory.decodeByteArray(raw, 0, raw.size)?.let { thumbnail = thumbnailJpeg(it) }
+        }
         Triple(raw, animated.mime, animated.ext)
     } else {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -368,10 +386,11 @@ internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: 
         // 重新编码成 JPEG 会丢掉 EXIF：相机拍的照片（尤其竖着拍）像素常是横的、靠 EXIF 方向标记转正，这里先按它转好再压
         val rotation = exifRotation(raw)
         val scale = minOf(1f, MAX_EDGE.toFloat() / maxOf(decoded.width, decoded.height))
-        val bitmap = if (scale < 1f || rotation != 0f) {
+        val bitmap = onWhite(if (scale < 1f || rotation != 0f) {
             val matrix = Matrix().apply { postScale(scale, scale); if (rotation != 0f) postRotate(rotation) }
             Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
-        } else decoded
+        } else decoded)
+        thumbnail = thumbnailJpeg(bitmap)
         var quality = 88
         var out: ByteArray
         do {
@@ -380,11 +399,96 @@ internal suspend fun uploadMessageImage(graph: AppGraph, context: Context, uri: 
         } while (out.size > MAX_IMAGE_BYTES && quality > 30)
         Triple(out, "image/jpeg", "jpg")
     }
+    thumbnail?.let { thumb -> uploadImageDirect(graph, bytes, type, thumb, onProgress)?.let { return@withContext it } }
+    onProgress?.invoke(0f)
     val body = MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("file", "image.$ext", ProgressBody(bytes, type.toMediaType(), onProgress))
         .build()
     val uploaded = graph.api.upload("/uploads/message-image", body)
     (uploaded as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull ?: error("上传没有返回地址")
+}
+
+/** 透明的地方垫白底（重新编码成 JPEG 时透明像素会变黑；服务端转 JPEG 也是垫白底） */
+private fun onWhite(bitmap: Bitmap): Bitmap {
+    if (!bitmap.hasAlpha()) return bitmap
+    val out = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+    Canvas(out).apply { drawColor(Color.WHITE); drawBitmap(bitmap, 0f, 0f, null) }
+    return out
+}
+
+/** 直传用的缩略图：最长边 360 的 JPEG；压不到 256KB 以内（几乎不会）返回 null，那就不直传 */
+private fun thumbnailJpeg(source: Bitmap): ByteArray? {
+    val scale = minOf(1f, THUMB_EDGE.toFloat() / maxOf(source.width, source.height))
+    val scaled = if (scale < 1f) {
+        Bitmap.createScaledBitmap(source, (source.width * scale).toInt().coerceAtLeast(1), (source.height * scale).toInt().coerceAtLeast(1), true)
+    } else source
+    val bitmap = onWhite(scaled)
+    for (quality in intArrayOf(70, 50)) {
+        val out = ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, quality, it); it.toByteArray() }
+        if (out.size in 1..MAX_THUMB_BYTES) return out
+    }
+    return null
+}
+
+// 服务端没开图片直传（或者是不认这个接口的老服务端）：这次运行里不再试
+@Volatile
+private var directImageUnavailable = false
+
+/**
+ * 聊天图片直传（后端 docs/chat-features.md「图片直传」）：开上传单拿两条预签名 PUT，主图和缩略图直接传进对象存储，
+ * 再 complete 拿地址。服务器到对象存储的带宽很小，经后端转一道时大图常超时。
+ * 返回 null = 这次没能直传（服务端没开、网络断了、桶拒了……），调用方走普通上传；服务端说这不是图片（400）照常抛出。
+ */
+private suspend fun uploadImageDirect(graph: AppGraph, image: ByteArray, type: String, thumbnail: ByteArray, onProgress: ((Float) -> Unit)?): String? {
+    if (directImageUnavailable) return null
+    val ticket = try {
+        graph.api.post("/uploads/message-image/direct", buildJsonObject {
+            put("content_type", type)
+            put("size", image.size)
+            put("thumbnail_size", thumbnail.size)
+        }) as? JsonObject
+    } catch (e: ApiException) {
+        if (e.code == "direct_upload_unavailable" || e.status == 404 || e.status == 405) directImageUnavailable = true
+        return null
+    } catch (e: IOException) {
+        return null
+    } ?: return null
+    val uploadId = (ticket["upload_id"] as? JsonPrimitive)?.contentOrNull ?: return null
+    val imageTarget = ticket["image"] as? JsonObject ?: return null
+    val thumbTarget = ticket["thumbnail"] as? JsonObject ?: return null
+    try {
+        putSigned(graph, imageTarget, image, type, onProgress)
+        putSigned(graph, thumbTarget, thumbnail, "image/jpeg", null)
+    } catch (e: IOException) {
+        return null
+    }
+    val path = "/uploads/message-image/direct/${URLEncoder.encode(uploadId, "UTF-8")}/complete"
+    val done = try {
+        graph.api.post(path)
+    } catch (e: ApiException) {
+        when (e.status) {
+            // 桶刚收完、head 还没看到对象（少数服务商会有一点延迟）：等一下再试一次
+            409 -> runCatching { delay(1000); graph.api.post(path) }.getOrNull() ?: return null
+            400 -> throw e
+            else -> return null
+        }
+    } catch (e: IOException) {
+        return null
+    }
+    return (done as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull
+}
+
+/** PUT 到预签名地址。签名里固定了 Content-Type：请求体的类型必须和它一模一样（OkHttp 用请求体的类型覆盖请求头） */
+private suspend fun putSigned(graph: AppGraph, target: JsonObject, bytes: ByteArray, type: String, onProgress: ((Float) -> Unit)?) {
+    val url = (target["url"] as? JsonPrimitive)?.contentOrNull ?: throw IOException("missing url")
+    val headers = (target["headers"] as? JsonObject)?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }.orEmpty()
+    val signedType = headers.firstOrNull { it.first.equals("Content-Type", ignoreCase = true) }?.second ?: type
+    val body = if (onProgress != null) ProgressBody(bytes, signedType.toMediaType(), onProgress) else bytes.toRequestBody(signedType.toMediaType())
+    val request = Request.Builder().url(url).put(body)
+    headers.forEach { (k, v) -> if (!k.equals("Content-Type", ignoreCase = true)) request.header(k, v) }
+    graph.api.http.newCall(request.build()).await().use { response ->
+        if (!response.isSuccessful) throw IOException("direct upload failed: ${response.code}")
+    }
 }
 
 /** EXIF 里的方向标记换成要顺时针转的角度；读不到（PNG、WebP、没有 EXIF）就是 0 */
