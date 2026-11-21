@@ -1,0 +1,119 @@
+name: Release
+
+# 推一个 v* 标签（例如 v2.0.12）就会打出签好名的正式版 apk，放进一个「草稿」Release；
+# 手动运行（workflow_dispatch）只打包、上传成 Actions 产物，不建 Release，用来试打。
+#
+# 仓库变量（Settings → Secrets and variables → Actions → Variables）：
+#   KUKECHAT_API_BASE_URL     必填，例如 https://chat-api.example.com
+#   KUKECHAT_WS_URL           必填，例如 wss://chat-api.example.com/ws
+#   KUKECHAT_INVITE_BASE_URL  选填，同服务端 INVITE_BASE_URL；不配就只认 kukechat://invite/<token>
+#
+# 仓库密钥（Secrets）：
+#   ANDROID_KEYSTORE_BASE64      签名密钥文件（.jks）的 base64
+#   ANDROID_KEYSTORE_PROPERTIES  keystore.properties 的全文（storeFile 写密钥文件名即可）
+# 同一个包名每个版本都要用同一把密钥，否则老用户无法覆盖升级。缺密钥时构建直接失败，不会打出未签名的包。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    name: 构建安卓正式版
+    runs-on: ubuntu-latest
+    env:
+      KUKECHAT_API_BASE_URL: ${{ vars.KUKECHAT_API_BASE_URL }}
+      KUKECHAT_WS_URL: ${{ vars.KUKECHAT_WS_URL }}
+      KUKECHAT_INVITE_BASE_URL: ${{ vars.KUKECHAT_INVITE_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 检查配置
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PROPS: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+        run: |
+          missing=""
+          [ -n "$KUKECHAT_API_BASE_URL" ] || missing="$missing KUKECHAT_API_BASE_URL(变量)"
+          [ -n "$KUKECHAT_WS_URL" ] || missing="$missing KUKECHAT_WS_URL(变量)"
+          [ -n "$KEYSTORE_B64" ] || missing="$missing ANDROID_KEYSTORE_BASE64(密钥)"
+          [ -n "$KEYSTORE_PROPS" ] || missing="$missing ANDROID_KEYSTORE_PROPERTIES(密钥)"
+          if [ -n "$missing" ]; then
+            echo "::error::缺少仓库配置:$missing"
+            exit 1
+          fi
+
+      - name: 读版本号
+        id: version
+        run: |
+          name=$(sed -n 's/^ *versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts)
+          code=$(sed -n 's/^ *versionCode *= *\([0-9]*\).*/\1/p' app/build.gradle.kts)
+          echo "versionName=$name versionCode=$code"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$name" ]; then
+            echo "::error::标签 ${GITHUB_REF_NAME} 和 app/build.gradle.kts 里的 versionName $name 对不上"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: 还原签名密钥
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PROPS: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+        run: |
+          dir="$RUNNER_TEMP/signing"
+          mkdir -p "$dir"
+          printf '%s' "$KEYSTORE_PROPS" > "$dir/keystore.properties"
+          store=$(sed -n 's/^storeFile=//p' "$dir/keystore.properties" | tr -d '\r')
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$dir/${store:-release.jks}"
+          echo "SIGNING_PROPS=$dir/keystore.properties" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 打包
+        run: |
+          chmod +x gradlew
+          args="-Pkukechat.apiBaseUrl=$KUKECHAT_API_BASE_URL -Pkukechat.wsUrl=$KUKECHAT_WS_URL -Pkukechat.signing=$SIGNING_PROPS"
+          [ -z "$KUKECHAT_INVITE_BASE_URL" ] || args="$args -Pkukechat.inviteBaseUrl=$KUKECHAT_INVITE_BASE_URL"
+          ./gradlew :app:assembleRelease --no-daemon $args
+
+      - name: 校验签名
+        id: apk
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          [ -f "$apk" ] || { echo "::error::没有打出签名的 apk（只有 app-release-unsigned.apk 说明签名配置没生效）"; ls app/build/outputs/apk/release; exit 1; }
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs "$apk" | grep -i "SHA-256"
+          out="KukeChat-${{ steps.version.outputs.name }}.apk"
+          cp "$apk" "$out"
+          sha256sum "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KukeChat-${{ steps.version.outputs.name }}-android
+          path: ${{ steps.apk.outputs.file }}
+
+      - name: 建草稿 Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 更新说明写在 docs/release-notes/<版本>/ 里（有 android.md 就用它）
+          notes="docs/release-notes/${{ steps.version.outputs.name }}/android.md"
+          [ -f "$notes" ] || { notes="$RUNNER_TEMP/notes.md"; : > "$notes"; }
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${{ steps.apk.outputs.file }}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.file }}" --draft \
+              --title "KukeChat ${{ steps.version.outputs.name }}" --notes-file "$notes"
+          fi
