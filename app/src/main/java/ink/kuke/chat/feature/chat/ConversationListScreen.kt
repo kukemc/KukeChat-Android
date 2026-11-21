@@ -576,6 +576,8 @@ private fun ConversationRow(conversation: Conversation, pinTop: Boolean, pinBott
                     )
                     // 单聊：好友徽章挂在名字后（不是好友 / 未开放时什么也不画）
                     if (!conversation.isGroup && !conversation.isSelf) FriendBadgeMark(conversation.directUser?.id, size = 16.dp, modifier = Modifier.padding(start = 4.dp))
+                    // 单聊：对方正在共创世界上玩 / 创作（docs/ccw-social.md）
+                    if (!conversation.isGroup && !conversation.isSelf) ink.kuke.chat.feature.user.CcwActivityMark(conversation.directUser?.id, size = 14.dp, modifier = Modifier.padding(start = 4.dp))
                     // 单聊：好友火花（图标 + 天数，docs/sparks.md）
                     if (!conversation.isGroup && !conversation.isSelf) ink.kuke.chat.feature.spark.SparkMark(conversation.spark, modifier = Modifier.padding(start = 4.dp))
                     PlusTierTag(conversation.effectivePlusTier, Modifier.padding(start = 6.dp), compact = true)

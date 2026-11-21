@@ -158,6 +158,8 @@ fun MainShell(graph: AppGraph, openConversationId: Long?, onConsumedOpen: () -> 
 
     LaunchedEffect(Unit) {
         IntimacyCache.start(graph)
+        // 好友在共创世界上正在玩的作品（docs/ccw-social.md）
+        ink.kuke.chat.feature.user.CcwActivityCache.start(graph)
         // 群公告的实时事件（删除后聊天里的公告卡片变灰、弹窗重拉）
         ink.kuke.chat.feature.groupannouncement.AnnouncementHub.start(graph)
         if (!keepAliveShown && !KeepAlive.ready(context)) {

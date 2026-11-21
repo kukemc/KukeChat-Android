@@ -1056,7 +1056,20 @@ private fun ChatTopBar(conversation: Conversation?, onBack: () -> Unit, onMore: 
                     conversation.isTemporary -> "临时会话"
                     else -> conversation.directUser?.presenceText ?: conversation.directUser?.profileStatus ?: ""
                 }
-                if (sub.isNotBlank()) Text(sub, style = type.caption, color = colors.muted, maxLines = 1)
+                // 对方正在共创世界上玩 / 创作（docs/ccw-social.md）：顶替副标题，点一下去同一个作品
+                val activity = ink.kuke.chat.feature.user.rememberCcwActivity(conversation?.takeIf { !it.isGroup && !it.isSelf }?.directUser?.id)
+                if (activity != null) {
+                    val uri = LocalUriHandler.current
+                    val url = activity.url()
+                    Row(
+                        Modifier.then(if (url != null) Modifier.clickable { runCatching { uri.openUri(url) } } else Modifier),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        KcIcon(KcIcons.gamepad2, tint = ink.kuke.chat.feature.user.CcwActivityGreen, size = 13.dp)
+                        Spacer(Modifier.width(4.dp))
+                        Text("${activity.label()} · ${activity.elapsed()}", style = type.caption, color = ink.kuke.chat.feature.user.CcwActivityGreen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else if (sub.isNotBlank()) Text(sub, style = type.caption, color = colors.muted, maxLines = 1)
             }
             // 设计稿 P03：群聊顶栏在「更多」前多一个「群任务」入口
             if (onSearch != null) {

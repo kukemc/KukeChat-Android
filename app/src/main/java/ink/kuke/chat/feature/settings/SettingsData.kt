@@ -49,6 +49,9 @@ data class MyProfile(
     @SerialName("profile_cover_url") val profileCoverUrl: String? = null,
     @SerialName("profile_cover_pending_url") val profileCoverPendingUrl: String? = null,
     @SerialName("share_typing") val shareTyping: Boolean = true,
+    /** 在共创世界上（docs/ccw-social.md）：公开「正在玩 / 正在创作」、别人能从 CCW 主页找到我；老后端不返回，按「开」处理 */
+    @SerialName("share_ccw_activity") val shareCcwActivity: Boolean = true,
+    @SerialName("ccw_discoverable") val ccwDiscoverable: Boolean = true,
     @SerialName("presence_status") val presenceStatus: String? = null,
     @SerialName("presence_text") val presenceText: String? = null,
     /** 别人戳我时的动作和后缀（docs/chat-features.md）；旧后端没有这两项 */

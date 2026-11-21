@@ -425,6 +425,7 @@ private fun FriendRow(user: User, onClick: () -> Unit, onLongClick: () -> Unit) 
                 ink.kuke.chat.feature.birthday.BirthdayMark(user.isBirthdayToday)
                 Spacer(Modifier.width(6.dp))
                 FriendBadgeMark(user.id, size = 16.dp)
+                ink.kuke.chat.feature.user.CcwActivityMark(user.id, size = 14.dp, modifier = Modifier.padding(start = 4.dp))
             }
             Text(
                 "${presenceLabel(user)} · ${user.bio?.takeIf { it.isNotBlank() } ?: "这个人很神秘，还没有简介"}",

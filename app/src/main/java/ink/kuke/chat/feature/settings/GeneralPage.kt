@@ -67,7 +67,15 @@ fun GeneralPage(graph: AppGraph) {
 
     val loader = rememberLoader(Unit, cache = graph.screenCache.slot(MY_PROFILE_CACHE_KEY)) { graph.fetchMyProfile() }
     var shareTyping by remember { mutableStateOf(true) }
-    LaunchedEffect(loader.data) { loader.data?.let { shareTyping = it.shareTyping } }
+    var shareCcwActivity by remember { mutableStateOf(true) }
+    var ccwDiscoverable by remember { mutableStateOf(true) }
+    LaunchedEffect(loader.data) {
+        loader.data?.let {
+            shareTyping = it.shareTyping
+            shareCcwActivity = it.shareCcwActivity
+            ccwDiscoverable = it.ccwDiscoverable
+        }
+    }
 
     Box(Modifier.fillMaxWidth().background(colors.chat)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 32.dp)) {
@@ -99,6 +107,38 @@ fun GeneralPage(graph: AppGraph) {
                         scope.launch {
                             runCatching { graph.api.patch("/users/me", buildJsonObject { put("share_typing", on) }) }
                                 .onFailure { shareTyping = previous; toast.show(it.userMessage(), scope) }
+                        }
+                    },
+                )
+            }
+
+            // 状态由油猴脚本 KukeChat for CCW 在共创世界页面上上报；没装脚本时这两项没有效果，但照样能改（同电脑版）
+            GroupLabel("在共创世界上")
+            GroupCard {
+                SwitchRow(
+                    "公开我正在玩的作品", checked = shareCcwActivity, icon = KcIcons.gamepad2,
+                    subtitle = "装了 KukeChat for CCW 脚本后，你在共创世界上玩或创作的作品会显示在你的名字旁边，所有人都能看到。关掉后立刻隐藏。",
+                    enabled = loader.data != null,
+                    onChange = { on ->
+                        val previous = shareCcwActivity
+                        shareCcwActivity = on
+                        scope.launch {
+                            runCatching { graph.api.patch("/users/me", buildJsonObject { put("share_ccw_activity", on) }) }
+                                .onFailure { shareCcwActivity = previous; toast.show(it.userMessage(), scope) }
+                        }
+                    },
+                )
+                RowDivider()
+                SwitchRow(
+                    "允许从共创世界主页找到我", checked = ccwDiscoverable, icon = KcIcons.gamepad2,
+                    subtitle = "别人在你的共创世界主页、评论区里能看到你的 KukeChat，并直接加好友、发私信。关掉后对别人显示为没有 KukeChat。",
+                    enabled = loader.data != null,
+                    onChange = { on ->
+                        val previous = ccwDiscoverable
+                        ccwDiscoverable = on
+                        scope.launch {
+                            runCatching { graph.api.patch("/users/me", buildJsonObject { put("ccw_discoverable", on) }) }
+                                .onFailure { ccwDiscoverable = previous; toast.show(it.userMessage(), scope) }
                         }
                     },
                 )
