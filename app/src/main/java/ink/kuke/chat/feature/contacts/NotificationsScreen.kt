@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -247,6 +251,8 @@ private class NotificationController(
 ) {
     /** 正在填拒绝理由的入群申请（弹框由 rememberNotificationController 画） */
     var rejecting by mutableStateOf<UnifiedNotification?>(null)
+    /** 正在看详情的申请（好友申请 / 入群申请）：附言、回答、拒绝理由完整显示，可在里面处理 */
+    var detail by mutableStateOf<UnifiedNotification?>(null)
 
     fun decide(n: UnifiedNotification, accept: Boolean, note: String? = null) {
         if (NotificationStore.busy[n.id] == true) return
@@ -310,6 +316,17 @@ private fun rememberNotificationController(graph: AppGraph, toast: ToastState): 
             delay(300)
             NotificationStore.refresh(graph)
         }
+    }
+    controller.detail?.let { n ->
+        val nav = LocalAppNav.current
+        RequestDetailSheet(
+            n = n,
+            onDismiss = { controller.detail = null },
+            onAccept = { controller.detail = null; controller.decide(n, true) },
+            onReject = { controller.detail = null; controller.decide(n, false) },
+            onIgnore = { controller.detail = null; controller.ignore(n) },
+            onOpen = { route -> controller.detail = null; nav.go(route) },
+        )
     }
     controller.rejecting?.let { n ->
         ink.kuke.chat.feature.chat.RejectJoinRequestDialog(
@@ -512,7 +529,14 @@ private fun LazyListScope.notificationRows(
                 onIgnore = { controller.ignore(e.n) },
                 onOpen = {
                     val route = routeOf(e.n)
-                    if (route != null) onOpen(route) else e.n.actor?.let { onOpen(UserRoute(it.id)) }
+                    // 申请类先看详情（附言、回答在列表里放不下），要进群 / 看资料在详情里点
+                    if (e.n.friendRequestId != null || e.n.groupJoinRequestId != null) {
+                        controller.detail = e.n
+                    } else if (route != null) {
+                        onOpen(route)
+                    } else {
+                        e.n.actor?.let { onOpen(UserRoute(it.id)) }
+                    }
                 },
             )
         }
@@ -685,8 +709,7 @@ private fun NotificationRow(
 
     Column(Modifier.fillMaxWidth().background(colors.panel)) {
         androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            androidx.compose.material3.DropdownMenuItem(text = { Text("拒绝（对方会看到已拒绝）", color = colors.danger) }, onClick = { menu = false; onReject() })
-            androidx.compose.material3.DropdownMenuItem(text = { Text("忽略") }, onClick = { menu = false; onIgnore() })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("忽略（对方看不出来）") }, onClick = { menu = false; onIgnore() })
         }
         Row(
             Modifier.fillMaxWidth()
@@ -705,7 +728,9 @@ private fun NotificationRow(
                 if (!snippet.isNullOrBlank() || status != null) {
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(snippet.orEmpty(), style = type.secondary, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // 入群申请带附言 / 回答时给两行，其余一行；完整内容点开详情看
+                        val lines = if (n.groupJoinRequestId != null && requestFields(n).isNotEmpty()) 2 else 1
+                        Text(snippet.orEmpty(), style = type.secondary, color = colors.muted, maxLines = lines, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         if (status != null && !canAct) {
                             Spacer(Modifier.width(8.dp))
                             StatusText(status)
@@ -716,9 +741,8 @@ private fun NotificationRow(
             if (canAct) {
                 Spacer(Modifier.width(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // 好友申请：忽略（对方看不出来）· 接受；要明确拒绝的话长按这一行
-                    if (n.friendRequestId != null) RowButton("忽略", primary = false, enabled = !busy, onClick = onIgnore)
-                    else RowButton("拒绝", primary = false, enabled = !busy, onClick = onReject)
+                    // 拒绝 · 接受 / 通过；好友申请的「忽略」（对方看不出来）在长按菜单和详情里
+                    RowButton("拒绝", primary = false, enabled = !busy, onClick = onReject)
                     RowButton(if (n.friendRequestId != null) "接受" else "通过", primary = true, enabled = !busy, onClick = onAccept)
                 }
             }
@@ -850,4 +874,129 @@ private fun systemIcon(n: UnifiedNotification): Pair<ImageVector, Color> = when 
     n.category == "friend" -> KcIcons.userPlus to Color(0xFF1F6BFF)
     n.category == "group" -> KcIcons.users to Color(0xFF12A679)
     else -> KcIcons.bell to Color(0xFF1F6BFF)
+}
+
+// ───────────────────────────── 申请详情 ─────────────────────────────
+
+private val RequestFieldLabels = listOf("附言", "回答", "拒绝理由")
+
+/**
+ * 入群申请 body 里的附言 / 回答 / 拒绝理由（服务端拼成「状态 · 附言：… · 回答：… · 拒绝理由：…」）。
+ * 附言里自己带「 · 」时，接回上一段而不是另起一个字段。拒绝理由服务端没写进 body 时从 decisionNoteOf 补。
+ */
+private fun requestFields(n: UnifiedNotification): List<Pair<String, String>> {
+    val out = ArrayList<Pair<String, String>>()
+    n.body?.split(" · ").orEmpty().drop(1).forEach { part ->
+        val label = RequestFieldLabels.firstOrNull { part.startsWith("$it：") }
+        when {
+            label != null -> out += label to part.removePrefix("$label：")
+            out.isNotEmpty() -> out[out.lastIndex] = out.last().first to (out.last().second + " · " + part)
+        }
+    }
+    if (out.none { it.first == "拒绝理由" }) decisionNoteOf(n)?.let { out += "拒绝理由" to it }
+    return out.filter { it.second.isNotBlank() }
+}
+
+/** 点一条好友申请 / 入群申请：谁、申请什么、附言回答全文，以及能做的操作 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RequestDetailSheet(
+    n: UnifiedNotification,
+    onDismiss: () -> Unit,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    onIgnore: () -> Unit,
+    onOpen: (Any) -> Unit,
+) {
+    val colors = KcTheme.colors
+    val type = KcTheme.type
+    val text = rowText(n)
+    val canAct = actionable(n)
+    val busy = NotificationStore.busy[n.id] == true
+    val status = NotificationStore.outcomes[n.id] ?: text.status ?: n.body?.split(" · ")?.firstOrNull()
+    val fields = requestFields(n)
+    val isFriend = n.friendRequestId != null
+    val outgoingGroup = n.type == "group.join_request.outgoing"
+    val group = n.conversationTitle?.takeIf { it.isNotBlank() } ?: "群聊"
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = colors.panel,
+    ) {
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 16.dp)
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val actor = n.actor
+                if (outgoingGroup || actor == null) Avatar(n.conversationAvatarUrl, group, n.conversationId ?: 0L, 48.dp)
+                else Avatar(actor.avatarUrl, actor.displayName, actor.id, 48.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (outgoingGroup) group else (n.actor?.displayName ?: n.title),
+                        style = type.title, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        when (n.type) {
+                            "friend.request.incoming" -> "请求添加你为好友"
+                            "friend.request.outgoing" -> "你发出的好友申请"
+                            "group.join_request.incoming" -> "申请加入 $group"
+                            else -> "你申请加入这个群"
+                        },
+                        style = type.secondary, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (status != null && !canAct) {
+                    Spacer(Modifier.width(8.dp))
+                    StatusText(status)
+                }
+            }
+            val time = relativeTime(n.time)
+            if (time.isNotBlank()) Text(time, style = type.caption, color = colors.subtle, modifier = Modifier.padding(top = 10.dp))
+
+            if (fields.isNotEmpty()) {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        fields.forEach { (label, value) ->
+                            Column(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.panelMuted).padding(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                Text(label, style = type.caption, color = colors.muted, fontWeight = FontWeight.W600)
+                                Spacer(Modifier.height(4.dp))
+                                Text(value, style = type.body, color = if (label == "拒绝理由") colors.danger else colors.text)
+                            }
+                        }
+                    }
+                }
+            } else if (n.groupJoinRequestId != null) {
+                Text("没有填写附言", style = type.secondary, color = colors.subtle, modifier = Modifier.padding(top = 14.dp))
+            }
+
+            // 看资料 / 进群
+            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!outgoingGroup) n.actor?.let { actor -> RowButton("查看资料", primary = false, enabled = true) { onOpen(UserRoute(actor.id)) } }
+                val conversationId = n.conversationId
+                if (n.groupJoinRequestId != null && n.action == "open_conversation" && conversationId != null) {
+                    RowButton("进入群聊", primary = false, enabled = true) { onOpen(ChatRoute(conversationId)) }
+                }
+            }
+
+            if (canAct) {
+                Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (isFriend) ink.kuke.chat.feature.chat.KcButton("忽略", onIgnore, modifier = Modifier.weight(1f), enabled = !busy, primary = false)
+                    ink.kuke.chat.feature.chat.KcButton("拒绝", onReject, modifier = Modifier.weight(1f), enabled = !busy, primary = false)
+                    ink.kuke.chat.feature.chat.KcButton(if (isFriend) "接受" else "通过", onAccept, modifier = Modifier.weight(1f), enabled = !busy)
+                }
+                if (isFriend) {
+                    Text("忽略：从你的列表里拿掉，对方仍显示「等待验证」；拒绝：对方会看到已拒绝。", style = type.caption, color = colors.subtle, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+        }
+    }
 }
